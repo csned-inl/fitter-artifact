@@ -1,4 +1,4 @@
-"""Build deterministic discretization-safety proof obligations and results."""
+"""Coordinate checker progression and assemble discretization analysis records."""
 
 from __future__ import annotations
 
@@ -9,18 +9,13 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable
 
-from clarity.certification.equations import Const, EquationModel, Expr, Ite, Op, RawRef, Var
+from clarity.certification.equations import Const, Expr, Op
 from clarity.certification.relevance import equation_refs
-from clarity.certification.solver import Encoder, infer_sorts
 from clarity.certification.strict_extract import CertificationExtractor
-from clarity.sysml.parser import IfStmt, PerformStmt, SubactionCallStmt
 
-from .certificates.replay import replay_serialized_boolean_expression, serialize_exact_value
 from .checkers.convex import run_convex_checker
-from .checkers.convex_envelope import run_convex_envelope_checker
 from .checkers.factored import run_lazy_factored_checker
 from .checkers.linear import run_linear_checker
-from .checkers.linear_envelope import run_linear_envelope_checker
 from .checkers.reachability import (
     SharedReachabilityCache,
     run_reachability_checker,
@@ -28,26 +23,29 @@ from .checkers.reachability import (
     run_smt_reachability_checker,
     shared_reachability_context_sha256,
 )
+from .model.expressions import expression_hash
 from .model.optimization import quadratic_constraints
 from .model.proof_rules import (
     ProofDeferred,
-    expand_definitions,
+    expr_to_dict,
     expression_is_linear,
-    expression_symbols,
     prove_implication_exact,
     substitute,
 )
-from .model.reduction import (
-    ReducedCase,
-    build_reduction,
-    expression_hash,
-    expr_to_dict,
+from .model.reduction import build_reduction
+from .model.reduction_types import ReducedCase
+from .obligations import (
+    _boolean_variables,
+    _continuous_targets,
+    _integer_variables,
+    _policy_call_guards,
+    _scenario_constraints,
+    _shield_expression,
+    _specified_constant_values,
+    _timing_record,
 )
 
-try:  # pragma: no cover - integration environment determines availability
-    import z3  # type: ignore
-except Exception:  # pragma: no cover
-    z3 = None
+
 
 
 CHECKER_ORDER = [
@@ -388,567 +386,6 @@ def _grouped_case_attempts(
     return results
 
 
-def _controller_context(extractor: CertificationExtractor) -> list[str]:
-    return extractor.legacy.ctrl_fqn.split("::")
-
-
-def _shield_expression(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-    mdp_certificate: dict[str, Any],
-) -> tuple[Expr, dict[str, Any]]:
-    shield = mdp_certificate["mdp_obligations"]["shield"]
-    predicate = shield.get("predicate_ast")
-    interface = shield.get("interface") or {}
-    subject = str(shield.get("subject_var") or "p")
-    if not isinstance(predicate, dict):
-        raise ProofDeferred("BLOCKED_INPUT", "shield predicate AST is missing")
-
-    input_sources = {
-        row["param"]: row["source_target"]
-        for row in shield.get("input_coverage", [])
-        if row.get("covered_by_q_and_action") is True
-    }
-    output_sources = {
-        row["param"]: row["action_vars"][0]
-        for row in shield.get("output_action_mapping", [])
-        if row.get("unique_action_var") is True and len(row.get("action_vars", [])) == 1
-    }
-    input_params = set(interface.get("input_params", []))
-    output_params = set(interface.get("output_params", []))
-    ctrl_ctx = _controller_context(extractor)
-
-    def convert(node: dict[str, Any]) -> Expr:
-        node_type = node.get("type")
-        if node_type == "literal":
-            return Const(node.get("value"))
-        if node_type == "ref":
-            path = list(node.get("path", []))
-            if len(path) == 2 and path[0] == subject:
-                param = path[1]
-                if param in input_params:
-                    source = input_sources.get(param)
-                    observation_key = str(source).removeprefix("obs.")
-                    if observation_key in model.observations:
-                        return model.observations[observation_key].expr
-                    if source in model.terminals:
-                        return model.terminals[source].expr
-                    raise ProofDeferred(
-                        "BLOCKED_INPUT",
-                        f"shield input {param} has no checked equation",
-                    )
-                if param in output_params:
-                    action = output_sources.get(param)
-                    if action is None:
-                        raise ProofDeferred(
-                            "BLOCKED_INPUT",
-                            f"shield output {param} has no unique action variable",
-                        )
-                    return Var(action)
-            return extractor._resolve_ref(  # pylint: disable=protected-access
-                path,
-                ctrl_ctx,
-                allow_legacy_fallback=False,
-            )
-        if node_type == "unary":
-            return Op(str(node.get("op")), (convert(node["operand"]),))
-        if node_type == "binary":
-            return Op(
-                str(node.get("op")),
-                (convert(node["left"]), convert(node["right"])),
-            )
-        if node_type == "ternary":
-            return Ite(
-                convert(node["condition"]),
-                convert(node["true"]),
-                convert(node["false"]),
-            )
-        raise ProofDeferred("UNSUPPORTED_EXPRESSION", f"shield node {node_type}")
-
-    expression = expand_definitions(model, convert(predicate))
-    return expression, {
-        "input_sources": input_sources,
-        "output_sources": output_sources,
-        "predicate": expr_to_dict(expression),
-    }
-
-
-def _policy_call_guards(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-) -> list[Expr]:
-    controller = extractor._controller_part_def()  # pylint: disable=protected-access
-    neural = extractor._neural_action_def()  # pylint: disable=protected-access
-    if controller is None or neural is None:
-        raise ProofDeferred("BLOCKED_INPUT", "controller or neural action is missing")
-    actions = {action.name: action for action in controller.actions}
-    guards: list[Expr] = []
-
-    def walk(statements, conditions: list[Expr], seen_actions: set[str]) -> None:
-        for statement in statements:
-            if isinstance(statement, SubactionCallStmt) and statement.type_name == neural.name:
-                guards.extend(conditions)
-            elif isinstance(statement, IfStmt):
-                condition = extractor._expr(  # pylint: disable=protected-access
-                    statement.condition,
-                    _controller_context(extractor),
-                    allow_legacy_fallback=False,
-                )
-                walk(statement.body, conditions + [condition], seen_actions)
-                if statement.else_body:
-                    walk(
-                        statement.else_body,
-                        conditions + [Op("not", (condition,))],
-                        seen_actions,
-                    )
-            elif isinstance(statement, PerformStmt):
-                if statement.action_name in seen_actions:
-                    raise ProofDeferred(
-                        "UNSUPPORTED_EXPRESSION",
-                        f"recursive performed action {statement.action_name}",
-                    )
-                action = actions.get(statement.action_name)
-                if action is not None:
-                    walk(action.body, conditions, seen_actions | {statement.action_name})
-
-    for action in controller.actions:
-        if action.name == "step":
-            walk(action.body, [], {"step"})
-    unique: list[Expr] = []
-    for guard in guards:
-        guard = expand_definitions(model, guard)
-        if guard not in unique:
-            unique.append(guard)
-    return unique
-
-
-def _scenario_constraints(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-) -> tuple[list[Expr], list[Expr]]:
-    parameter_constraints: list[Expr] = []
-    initial_state_constraints: list[Expr] = []
-    for constraint in extractor.parser.parsed_constraints:
-        if "ScenarioConstraint" not in getattr(constraint, "metadata", []):
-            continue
-        ctx = extractor._ctx(constraint.context)  # pylint: disable=protected-access
-        for conjunct in extractor._conjuncts(constraint.expression):  # pylint: disable=protected-access
-            expression = expand_definitions(
-                model,
-                extractor._expr(  # pylint: disable=protected-access
-                    conjunct,
-                    ctx,
-                    allow_legacy_fallback=False,
-                ),
-            )
-            if expression_symbols(expression) & model.state:
-                initial_state_constraints.append(expression)
-            else:
-                parameter_constraints.append(expression)
-    return parameter_constraints, initial_state_constraints
-
-
-def _boolean_variables(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-    mdp_certificate: dict[str, Any],
-) -> set[str]:
-    variables = set()
-    for fqn, instance in extractor.parser.part_instances.items():
-        part = extractor.parser.part_defs.get(instance.part_type)
-        if part is None:
-            continue
-        for attribute, type_name in part.attributes.items():
-            if type_name.lower() in {"bool", "boolean"}:
-                variables.add(extractor.legacy._canon(fqn.split("::") + [attribute]))
-    interface = mdp_certificate["mdp_obligations"]["shield"].get("interface") or {}
-    output_types = interface.get("output_param_types") or {}
-    output_mapping = mdp_certificate["mdp_obligations"]["shield"].get(
-        "output_action_mapping", []
-    )
-    for row in output_mapping:
-        if str(output_types.get(row.get("param"), "")).lower() in {"bool", "boolean"}:
-            variables.update(row.get("action_vars", []))
-    return variables & (model.state | model.actions | set(model.definitions))
-
-
-def _integer_variables(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-) -> set[str]:
-    variables: set[str] = set()
-    for fqn, instance in extractor.parser.part_instances.items():
-        part = extractor.parser.part_defs.get(instance.part_type)
-        if part is None:
-            continue
-        for attribute, type_name in part.attributes.items():
-            if type_name.lower() == "integer":
-                variables.add(
-                    extractor.legacy._canon(fqn.split("::") + [attribute])
-                )
-    return variables & (
-        model.state
-        | model.actions
-        | model.constants
-        | set(model.definitions)
-        | set(model.observations)
-    )
-
-
-def _continuous_targets(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-) -> tuple[set[str], set[str], list[dict[str, Any]]]:
-    annotated: set[str] = set()
-    dt_updated: set[str] = set()
-    records: list[dict[str, Any]] = []
-    for action in extractor.parser.step_actions:
-        target = extractor.legacy._canon(action.target_key.split("::"))
-        equation = model.transitions.get(target)
-        if equation is None:
-            continue
-        symbols = expression_symbols(equation.expr)
-        uses_dt = any(name == "dt" or name.endswith("_dt") for name in symbols)
-        if uses_dt:
-            dt_updated.add(target)
-        if "ContinuousRate" in action.metadata:
-            annotated.add(target)
-            records.append({
-                "target": target,
-                "metadata": list(action.metadata),
-                "equation": equation.pretty(),
-                "uses_dt": uses_dt,
-            })
-    return annotated, dt_updated, records
-
-
-def _specified_constant_values(
-    extractor: CertificationExtractor,
-    model: EquationModel,
-    dt_record: dict[str, Any],
-) -> dict[str, Expr]:
-    values: dict[str, Expr] = {}
-    for parameter in extractor.parser.parameters:
-        target = extractor.legacy._canon(parameter.qualified_name.split("::"))
-        if target not in model.constants or "ScenarioInput" in parameter.metadata:
-            continue
-        values[target] = Const(parameter.value)
-    for target in model.constants:
-        if target == "dt" or target.endswith("_dt"):
-            values[target] = Const(dt_record["canonical"])
-    return values
-
-
-def _timing_record(
-    mdp_certificate: dict[str, Any],
-    dt_record: dict[str, Any],
-) -> dict[str, Any]:
-    sampled = []
-    for fact in mdp_certificate.get("equation_proof", {}).get("facts", []):
-        if fact.get("rule") != "sampled_memory_bound":
-            continue
-        detail = fact.get("detail") or {}
-        sampled.append({
-            "target": detail.get("target", fact.get("var")),
-            "source": detail.get("source"),
-            "max_delay_steps": int(detail.get("max_delay", 1)),
-            "schedule_state": detail.get("schedule_state"),
-        })
-    return {
-        "fixed_dt": dt_record,
-        "sampled_memory_cases": sampled,
-        "information_delay_treatment": (
-            "The recorded observation and action history reconstructs the modeled "
-            "state used at the controller update. It is retained as information "
-            "history and is not converted into elapsed physical time."
-        ),
-        "interval_length_use": (
-            "Every physical trajectory is checked for interval time from zero through "
-            "the single fixed dt. Sensor and schedule guards are retained in the "
-            "sampled point premise."
-        ),
-        "observation_defect_envelope": {
-            "physical_time_upper": dt_record["canonical"],
-            "fixed_dt": True,
-            "information_history": sampled,
-        },
-    }
-
-
-def _top_level_conjuncts(expression: Expr) -> list[Expr]:
-    if isinstance(expression, Op) and expression.op == "and":
-        result: list[Expr] = []
-        for argument in expression.args:
-            result.extend(_top_level_conjuncts(argument))
-        return result
-    return [expression]
-
-
-def _conjunction(expressions: list[Expr]) -> Expr:
-    if not expressions:
-        return Const(True)
-    if len(expressions) == 1:
-        return expressions[0]
-    return Op("and", tuple(expressions))
-
-
-def _raw_reference_names(expression: Expr) -> set[str]:
-    if isinstance(expression, RawRef):
-        return {expression.path}
-    if isinstance(expression, Op):
-        result: set[str] = set()
-        for argument in expression.args:
-            result.update(_raw_reference_names(argument))
-        return result
-    if isinstance(expression, Ite):
-        return (
-            _raw_reference_names(expression.cond)
-            | _raw_reference_names(expression.then_expr)
-            | _raw_reference_names(expression.else_expr)
-        )
-    return set()
-
-
-def _z3_exact_value(value: Any) -> bool | Fraction:
-    if z3.is_true(value):
-        return True
-    if z3.is_false(value):
-        return False
-    if z3.is_rational_value(value):
-        return Fraction(value.numerator_as_long(), value.denominator_as_long())
-    raise ValueError(f"Z3 value is not an exact rational or Boolean: {value}")
-
-
-def _exact_model_values(
-    model: EquationModel,
-    encoder: Encoder,
-    solver_model: Any,
-    expression: Expr,
-) -> dict[str, bool | str]:
-    raw_references = _raw_reference_names(expression)
-    values: dict[str, bool | str] = {}
-    for name in sorted(expression_symbols(expression)):
-        if name in raw_references:
-            encoded = encoder.const_var(name)
-        else:
-            encoded = encoder.encode_expr(Var(name), 1, "current")
-        exact = _z3_exact_value(
-            solver_model.eval(encoded, model_completion=True)
-        )
-        values[name] = serialize_exact_value(exact)
-    return values
-
-
-def _core_recertification_attempts(
-    reduced_case: ReducedCase,
-    selected_constraints: list[Expr],
-    *,
-    timeout_ms: int,
-) -> tuple[ReducedCase, list[dict[str, Any]], dict[str, Any] | None]:
-    core_case = ReducedCase(
-        case_id=reduced_case.case_id + ".smt_core",
-        expression=_conjunction(selected_constraints),
-        parent_hash=expression_hash(reduced_case.expression),
-        boolean_assignment=reduced_case.boolean_assignment,
-        time_reduction=reduced_case.time_reduction,
-        obligation=reduced_case.obligation,
-    )
-    checks = [
-        (
-            "linear",
-            lambda: run_linear_checker(core_case, set(), timeout_ms=timeout_ms),
-        ),
-        (
-            "linear_envelope",
-            lambda: run_linear_envelope_checker(core_case, timeout_ms=timeout_ms),
-        ),
-        (
-            "convex",
-            lambda: run_convex_checker(core_case, set(), timeout_ms=timeout_ms),
-        ),
-        (
-            "convex_envelope",
-            lambda: run_convex_envelope_checker(core_case, timeout_ms=timeout_ms),
-        ),
-    ]
-    attempts: list[dict[str, Any]] = []
-    for checker, run in checks:
-        attempt = _validated_attempt(run())
-        record = {
-            "checker": checker,
-            "outcome": attempt.get("outcome", "DEFERRED"),
-            "reason_code": attempt.get("reason_code", ""),
-            "detail": attempt.get("detail", ""),
-            "applicability_checks": attempt.get("applicability_checks") or {},
-            "proof": attempt.get("proof") or {},
-        }
-        attempts.append(record)
-        if record["outcome"] == "CERTIFIED":
-            return core_case, attempts, record
-    return core_case, attempts, None
-
-
-def _smt_fallback(
-    model: EquationModel,
-    reduced_case: ReducedCase,
-    *,
-    timeout_ms: int,
-    recertification_timeout_ms: int,
-) -> dict[str, Any]:
-    if z3 is None:
-        return _stage(
-            "smt_fallback",
-            "DEFERRED",
-            reason_code="BLOCKED_INPUT",
-            detail="z3-solver is unavailable",
-        )
-    try:
-        sorts, conflicts = infer_sorts(model)
-        if conflicts:
-            return _stage(
-                "smt_fallback",
-                "DEFERRED",
-                reason_code="UNSUPPORTED_EXPRESSION",
-                detail="; ".join(conflicts),
-            )
-        encoder = Encoder(model, sorts)
-        solver = z3.Solver()
-        solver.set(timeout=int(timeout_ms))
-        solver.set(unsat_core=True)
-        source_constraints = _top_level_conjuncts(reduced_case.expression)
-        trackers = [
-            z3.Bool(f"discretization_core_{index}")
-            for index in range(len(source_constraints))
-        ]
-        for index, constraint in enumerate(source_constraints):
-            solver.add(z3.Implies(
-                trackers[index],
-                encoder.encode_expr(constraint, 1, "current"),
-            ))
-        result = solver.check(*trackers)
-        if result == z3.unknown:
-            reason = solver.reason_unknown()
-            code = "TIMEOUT" if "timeout" in reason.lower() else "PROOF_REJECTED"
-            return _stage(
-                "smt_fallback",
-                "DEFERRED",
-                reason_code=code,
-                detail=reason,
-                proof={"solver_status": "unknown"},
-            )
-        if result == z3.unsat:
-            selected_indices = sorted({
-                int(str(item).removeprefix("discretization_core_"))
-                for item in solver.unsat_core()
-            })
-            minimization_checks = 0
-            minimization_complete = True
-            for index in tuple(selected_indices):
-                candidate = [
-                    item for item in selected_indices if item != index
-                ]
-                candidate_result = solver.check(*[
-                    trackers[item] for item in candidate
-                ])
-                minimization_checks += 1
-                if candidate_result == z3.unsat:
-                    selected_indices = candidate
-                elif candidate_result == z3.unknown:
-                    minimization_complete = False
-            selected_constraints = [
-                source_constraints[index] for index in selected_indices
-            ]
-            core_case, attempts, certified = _core_recertification_attempts(
-                reduced_case,
-                selected_constraints,
-                timeout_ms=recertification_timeout_ms,
-            )
-            proof = {
-                "rule": "solver_selected_subset_recertification_v1",
-                "solver_status": "unsat",
-                "source_expression_sha256": expression_hash(
-                    reduced_case.expression
-                ),
-                "source_constraint_count": len(source_constraints),
-                "selected_indices": selected_indices,
-                "subset_minimization_checks": minimization_checks,
-                "subset_minimization_complete": minimization_complete,
-                "selected_constraints": [
-                    expr_to_dict(item) for item in selected_constraints
-                ],
-                "selected_expression": expr_to_dict(core_case.expression),
-                "selected_expression_sha256": expression_hash(
-                    core_case.expression
-                ),
-                "recertification_attempts": attempts,
-            }
-            if certified is not None:
-                proof["certifying_checker"] = certified["checker"]
-                proof["certificate_attempt"] = certified
-                return _stage(
-                    "smt_fallback",
-                    "CERTIFIED",
-                    detail=(
-                        "a solver-selected subset of the source constraints "
-                        "has an independently checked linear or convex certificate"
-                    ),
-                    proof=proof,
-                )
-            return _stage(
-                "smt_fallback",
-                "DEFERRED",
-                reason_code="PROOF_REJECTED",
-                detail=(
-                    "the solver-selected source constraint subset was not "
-                    "certified by the linear or convex checkers"
-                ),
-                proof=proof,
-            )
-        exact_values = _exact_model_values(
-            model,
-            encoder,
-            solver.model(),
-            reduced_case.expression,
-        )
-        replayed = replay_serialized_boolean_expression(
-            expr_to_dict(reduced_case.expression),
-            exact_values,
-        )
-        if replayed:
-            return _stage(
-                "smt_fallback",
-                "DEFERRED",
-                reason_code="REACHABILITY_BOUND_INCONCLUSIVE",
-                detail=(
-                    "the exact values replay the local unsafe constraints, but "
-                    "do not establish reachability from the declared initial state"
-                ),
-                proof={
-                    "rule": "exact_local_feasibility_replay_v1",
-                    "solver_status": "sat",
-                    "source_expression_sha256": expression_hash(
-                        reduced_case.expression
-                    ),
-                    "exact_values": exact_values,
-                    "exact_replay": True,
-                },
-            )
-        return _stage(
-            "smt_fallback",
-            "DEFERRED",
-            reason_code="COUNTEREXAMPLE_REPLAY_FAILED",
-            detail="solver candidate was not independently replayed",
-            proof={"solver_status": "sat"},
-        )
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        return _stage(
-            "smt_fallback",
-            "DEFERRED",
-            reason_code="MALFORMED_OUTPUT",
-            detail=str(exc),
-        )
-
-
 def analyze_model(
     model_path: str | Path,
     mdp_certificate: dict[str, Any],
@@ -957,6 +394,8 @@ def analyze_model(
     optimization_timeout_ms: int = 250,
     smt_timeout_ms: int = 30000,
 ) -> dict[str, Any]:
+    from .smt_fallback import _smt_fallback
+
     path = str(Path(model_path).resolve())
     dt_record = canonical_dt(dt_text)
     extractor = CertificationExtractor(path)

@@ -17,7 +17,7 @@ from ..model.optimization import (
     serialize_quadratic_constraints,
 )
 from ..model.proof_rules import ProofDeferred
-from ..model.reduction import ReducedCase
+from ..model.reduction_types import ReducedCase
 
 try:  # pragma: no cover - installation is checked by the integration run
     import numpy as np

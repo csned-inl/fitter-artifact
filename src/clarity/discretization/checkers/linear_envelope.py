@@ -14,7 +14,8 @@ from ..model.proof_rules import (
     ProofDeferred,
     fraction_value,
 )
-from ..model.reduction import ReducedCase, expression_hash
+from ..model.expressions import expression_hash
+from ..model.reduction_types import ReducedCase
 
 try:  # pragma: no cover - installation is checked by integration runs
     import numpy as np

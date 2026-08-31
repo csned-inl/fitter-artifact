@@ -14,34 +14,32 @@ from unittest.mock import patch
 from clarity.certification.certificate import load_certificate as load_mdp_certificate
 from clarity.certification.equations import Const, EquationModel, Op, Var
 
-from .analysis import CHECKER_ORDER, analyze_model
-from .certificate import certificate_hash, check_certificate, load_certificate
-from .certificates.replay import replay_serialized_boolean_expression
-from .certificates.verifier import (
+from clarity.discretization.analysis import CHECKER_ORDER, analyze_model
+from clarity.discretization.certificate import certificate_hash, check_certificate, load_certificate
+from clarity.discretization.certificates.replay import replay_serialized_boolean_expression
+from clarity.discretization.certificates.verification import (
     verify_recorded_convex_certificate,
-    _verify_lazy_factored_stage,
     verify_recorded_linear_certificate,
     verify_recorded_outer_reduction,
 )
-from .checkers.convex import run_convex_checker, solve_convex_constraints
-from .checkers.convex_envelope import run_convex_envelope_checker
-from .checkers.factored import run_lazy_factored_checker
-from .checkers.linear import run_linear_checker, solve_linear_constraints
-from .checkers.linear_envelope import run_linear_envelope_checker
-from .checkers.reachability import run_reachability_checker, run_smt_reachability_checker
-from .model.optimization import QuadraticConstraint
-from .model.proof_rules import (
+from clarity.discretization.certificates.verification.factored import (
+    _verify_lazy_factored_stage,
+)
+from clarity.discretization.checkers.convex import run_convex_checker, solve_convex_constraints
+from clarity.discretization.checkers.convex_envelope import run_convex_envelope_checker
+from clarity.discretization.checkers.factored import run_lazy_factored_checker
+from clarity.discretization.checkers.linear import run_linear_checker, solve_linear_constraints
+from clarity.discretization.checkers.linear_envelope import run_linear_envelope_checker
+from clarity.discretization.checkers.reachability import run_reachability_checker, run_smt_reachability_checker
+from clarity.discretization.model.optimization import QuadraticConstraint
+from clarity.discretization.model.proof_rules import (
     LinearInequality,
     expr_to_dict,
     expression_is_linear,
     prove_implication_exact,
 )
-from .model.reduction import (
-    INTERVAL_TIME,
-    ReachabilityContext,
-    ReducedCase,
-    expression_hash,
-)
+from clarity.discretization.model.expressions import INTERVAL_TIME, expression_hash
+from clarity.discretization.model.reduction_types import ReachabilityContext, ReducedCase
 
 
 def require(condition: bool, message: str) -> None:

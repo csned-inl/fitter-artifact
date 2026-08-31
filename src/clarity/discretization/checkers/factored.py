@@ -9,14 +9,14 @@ from typing import Any, Callable
 
 from clarity.certification.equations import Const, Expr, Ite, Op, RawRef, Var
 
-from ..model.proof_rules import expr_to_dict, expression_symbols, substitute
-from ..model.reduction import (
+from ..model.expressions import (
     INTERVAL_TIME,
-    ReducedCase,
     _time_degree,
     expression_hash,
     simplify,
 )
+from ..model.proof_rules import expr_to_dict, expression_symbols, substitute
+from ..model.reduction_types import ReducedCase
 
 
 Attempt = dict[str, Any]

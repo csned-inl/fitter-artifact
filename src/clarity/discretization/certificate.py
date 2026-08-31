@@ -20,7 +20,7 @@ from clarity.certification.reduced_mdp_spec import (
 )
 
 from .analysis import analyze_model, canonical_dt
-from .certificates.verifier import verify_recorded_optimization_certificates
+from .certificates.verification import verify_recorded_optimization_certificates
 
 
 SCHEMA_VERSION = 3
