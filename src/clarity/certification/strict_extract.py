@@ -83,6 +83,62 @@ class CertificationExtractor:
         self._audit_equations()
         return self.model
 
+    def canonical_name(self, path: Iterable[str]) -> str:
+        """Return the equation-model name for a qualified SysML path."""
+        return self.legacy._canon(list(path))  # pylint: disable=protected-access
+
+    def controller_context(self) -> list[str]:
+        """Return the qualified context of the controller instance."""
+        return self.legacy.ctrl_fqn.split("::")
+
+    def context(self, context: str | None) -> list[str]:
+        """Return the qualified context used to resolve a parsed expression."""
+        return self._ctx(context)
+
+    def resolve_reference(
+        self,
+        ref: Iterable[str],
+        context: list[str],
+        subject_var: str | None = None,
+        *,
+        allow_legacy_fallback: bool = True,
+    ) -> Expr:
+        """Resolve a parsed SysML reference into the checked equation model."""
+        return self._resolve_ref(
+            ref,
+            context,
+            subject_var,
+            allow_legacy_fallback,
+        )
+
+    def expression(
+        self,
+        expression,
+        context: list[str],
+        subject_var: str | None = None,
+        *,
+        allow_legacy_fallback: bool = True,
+    ) -> Expr:
+        """Convert a parsed SysML expression into an equation expression."""
+        return self._expr(
+            expression,
+            context,
+            subject_var,
+            allow_legacy_fallback,
+        )
+
+    def conjuncts(self, expression) -> list:
+        """Return the top-level conjuncts of a parsed SysML expression."""
+        return self._conjuncts(expression)
+
+    def neural_action_definition(self):
+        """Return the unique neural action definition, when present."""
+        return self._neural_action_def()
+
+    def controller_part_definition(self):
+        """Return the controller part definition, when present."""
+        return self._controller_part_def()
+
     def _extract_initial_values(self) -> None:
         owners = [(None, self.parser.system_type)] + [
             (instance.name, instance.part_type)

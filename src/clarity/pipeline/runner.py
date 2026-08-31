@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from clarity.models import models_root
-from clarity.runtime.shield import SpecShield, _collect_refs
+from clarity.runtime.shield import SpecShield, collect_references
 from clarity.sysml.inputs import SysMLInput, discover_sysml
 from clarity.sysml.runtime_settings import DEFAULT_DT, validate_dt
 
@@ -281,7 +281,7 @@ def stage_weak(
     log_lines = []
     for model in models:
         requirement = SpecShield(str(model.path))
-        references = _collect_refs(requirement.req_ast)
+        references = collect_references(requirement.req_ast)
         allowed = (
             set(requirement.in_params)
             | set(requirement.out_params)
@@ -624,67 +624,35 @@ def _float_or_none(value: Any) -> float | None:
 def _run_training_job(job: dict[str, Any], py: str, out_dir: Path) -> dict[str, Any]:
     name = job["model"]
     hidden_dim = int(job["hidden_dim"])
-    kind = job["kind"]
+    kind = "discrete"
     run_dir = job["run_dir"]
     log_path = job["log_path"]
-    if kind == "discrete":
-        cmd = [
-            py,
-            "-m",
-            "clarity.training.reduced.train_one_seed",
-            str(job["model_path"]),
-            "--out-dir",
-            str(run_dir),
-            "--seed",
-            str(job["seed"]),
-            "--max-obs",
-            "2",
-            "--max-act",
-            "4",
-            "--dt",
-            str(job["dt"]),
-            "--reduced-mdp-spec",
-            str(job["spec_path"]),
-            "--collection-backend",
-            str(job["collection_backend"]),
-            "--collection-workers",
-            str(job["collection_workers"]),
-            "--collection-start-method",
-            str(job["collection_start_method"]),
-            *job.get("overrides", []),
-        ]
-        weight_path = run_dir / "best.npz"
-    else:
-        summary_json = run_dir / "summary.json"
-        cmd = [
-            py,
-            "train_mlp_buffer.py",
-            str(job["model_path"]),
-            "--save-dir",
-            str(run_dir),
-            "--summary-json",
-            str(summary_json),
-            "--reduced-mdp-spec",
-            str(job["spec_path"]),
-            "--seed",
-            str(job["seed"]),
-            "--dt",
-            str(job["dt"]),
-            "--hidden-dim",
-            str(hidden_dim),
-            "--episodes",
-            str(job["continuous_episodes"]),
-            "--episodes-per-update",
-            str(job["continuous_episodes_per_update"]),
-            "--eval-interval",
-            str(job["continuous_eval_interval"]),
-            "--eval-episodes",
-            str(job["continuous_eval_episodes"]),
-            "--max-steps",
-            str(job["continuous_max_steps"]),
-            "--anneal-lr",
-        ]
-        weight_path = run_dir / "best.pt"
+    cmd = [
+        py,
+        "-m",
+        "clarity.training.reduced.train_one_seed",
+        str(job["model_path"]),
+        "--out-dir",
+        str(run_dir),
+        "--seed",
+        str(job["seed"]),
+        "--max-obs",
+        "2",
+        "--max-act",
+        "4",
+        "--dt",
+        str(job["dt"]),
+        "--reduced-mdp-spec",
+        str(job["spec_path"]),
+        "--collection-backend",
+        str(job["collection_backend"]),
+        "--collection-workers",
+        str(job["collection_workers"]),
+        "--collection-start-method",
+        str(job["collection_start_method"]),
+        *job.get("overrides", []),
+    ]
+    weight_path = run_dir / "best.npz"
 
     started = time.time()
     run, raw_text = run_command(cmd, log_path, out_dir)
@@ -806,17 +774,8 @@ def stage_training(out_dir: Path, py: str, models: list[SysMLInput], *, dt: floa
     stage_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
-    discrete_models = [model for model in models if model.action_kind == "discrete"]
-    continuous_models = [model for model in models if model.action_kind == "continuous"]
     job_count = max(1, jobs if jobs is not None else min(6, os.cpu_count() or 1))
     discrete_overrides: list[str] = []
-    continuous_settings = {
-        "episodes": 2000,
-        "episodes_per_update": 20,
-        "eval_interval": 100,
-        "eval_episodes": 100,
-        "max_steps": 1200,
-    }
     if smoke:
         discrete_overrides = [
             "--oracle-samples", "96",
@@ -832,13 +791,6 @@ def stage_training(out_dir: Path, py: str, models: list[SysMLInput], *, dt: floa
             "--minibatch-size", "4",
             "--max-steps", "300",
         ]
-        continuous_settings = {
-            "episodes": 8,
-            "episodes_per_update": 2,
-            "eval_interval": 2,
-            "eval_episodes": 3,
-            "max_steps": 300,
-        }
         job_count = min(job_count, 4)
 
     cpu_count = max(1, os.cpu_count() or 1)
@@ -855,7 +807,7 @@ def stage_training(out_dir: Path, py: str, models: list[SysMLInput], *, dt: floa
 
     training_jobs: list[dict[str, Any]] = []
     architectures: dict[str, dict[str, Any]] = {}
-    for model in discrete_models:
+    for model in models:
         name = model.key
         spec_path = _spec_path(out_dir, name)
         if not spec_path.exists():
@@ -882,34 +834,6 @@ def stage_training(out_dir: Path, py: str, models: list[SysMLInput], *, dt: floa
             "collection_start_method": collection_start_method,
         })
 
-    for model in continuous_models:
-        name = model.key
-        spec_path = _spec_path(out_dir, name)
-        if not spec_path.exists():
-            raise RuntimeError(
-                f"current run did not generate a reduced-MDP spec for {name}"
-            )
-        architecture = _feedforward_architecture_from_spec(spec_path, dt=dt)
-        architectures[name] = architecture
-        hidden_dim = int(architecture["hidden_dim"])
-        run_dir = stage_dir / "runs" / name / f"h{hidden_dim}" / "seed_0"
-        training_jobs.append({
-            "model": name,
-            "model_path": model.path,
-            "kind": "continuous",
-            "dt": dt,
-            "hidden_dim": hidden_dim,
-            "seed": 0,
-            "run_dir": run_dir,
-            "log_path": log_dir / f"05_train_{name}_h{hidden_dim}.txt",
-            "spec_path": spec_path,
-            "continuous_episodes": continuous_settings["episodes"],
-            "continuous_episodes_per_update": continuous_settings["episodes_per_update"],
-            "continuous_eval_interval": continuous_settings["eval_interval"],
-            "continuous_eval_episodes": continuous_settings["eval_episodes"],
-            "continuous_max_steps": continuous_settings["max_steps"],
-        })
-
     manifest = {
         "dt": dt,
         "mode": "smoke" if smoke else "full",
@@ -926,7 +850,6 @@ def stage_training(out_dir: Path, py: str, models: list[SysMLInput], *, dt: floa
             "200 final test episodes, 2000 oracle samples, 100 oracle epochs"
             if not smoke else "smoke overrides"
         ),
-        "continuous_training_settings": continuous_settings,
         "selection_rule": (
             "each model uses the sole SysML-derived architecture; a trained model is "
             "selected only from a zero-violation checkpoint, using test success and "
@@ -1101,8 +1024,7 @@ def write_report(out_dir: Path, summary: dict[str, Any]) -> None:
         lines.append("Claim: the run-local certified specs can be consumed by non-recurrent")
         lines.append("feedforward trainers. For each model, the SysML requirement determines")
         lines.append("one hidden size from its comparison boundaries and outputs.")
-        lines.append("Discrete models use the handmade NumPy PPO stack.")
-        lines.append("Real-valued actions use the bundled continuous MLP PPO stack.")
+        lines.append("The models use the handmade NumPy PPO stack.")
         lines.append("All training runs on CPU and checks actions against the requirement")
         lines.append("read from the current SysML file.")
         lines.append("")
@@ -1196,6 +1118,12 @@ def main() -> int:
     if args.discretization_optimization_timeout_ms <= 0:
         parser.error("--discretization-optimization-timeout-ms must be positive")
     models = discover_sysml(args.models, models_root=args.models_root)
+    unsupported = [model.path for model in models if model.action_kind != "discrete"]
+    if unsupported:
+        parser.error(
+            "continuous-action controllers are archived and unsupported by the "
+            "active pipeline: " + ", ".join(unsupported)
+        )
 
     out_dir = Path(args.out_dir).resolve()
     if out_dir.exists():

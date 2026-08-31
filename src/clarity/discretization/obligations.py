@@ -16,11 +16,7 @@ from .model.proof_rules import (
 )
 
 
-def _controller_context(extractor: CertificationExtractor) -> list[str]:
-    return extractor.legacy.ctrl_fqn.split("::")
-
-
-def _shield_expression(
+def shield_expression(
     extractor: CertificationExtractor,
     model: EquationModel,
     mdp_certificate: dict[str, Any],
@@ -44,7 +40,7 @@ def _shield_expression(
     }
     input_params = set(interface.get("input_params", []))
     output_params = set(interface.get("output_params", []))
-    ctrl_ctx = _controller_context(extractor)
+    ctrl_ctx = extractor.controller_context()
 
     def convert(node: dict[str, Any]) -> Expr:
         node_type = node.get("type")
@@ -73,7 +69,7 @@ def _shield_expression(
                             f"shield output {param} has no unique action variable",
                         )
                     return Var(action)
-            return extractor._resolve_ref(  # pylint: disable=protected-access
+            return extractor.resolve_reference(
                 path,
                 ctrl_ctx,
                 allow_legacy_fallback=False,
@@ -101,12 +97,12 @@ def _shield_expression(
     }
 
 
-def _policy_call_guards(
+def policy_call_guards(
     extractor: CertificationExtractor,
     model: EquationModel,
 ) -> list[Expr]:
-    controller = extractor._controller_part_def()  # pylint: disable=protected-access
-    neural = extractor._neural_action_def()  # pylint: disable=protected-access
+    controller = extractor.controller_part_definition()
+    neural = extractor.neural_action_definition()
     if controller is None or neural is None:
         raise ProofDeferred("BLOCKED_INPUT", "controller or neural action is missing")
     actions = {action.name: action for action in controller.actions}
@@ -117,9 +113,9 @@ def _policy_call_guards(
             if isinstance(statement, SubactionCallStmt) and statement.type_name == neural.name:
                 guards.extend(conditions)
             elif isinstance(statement, IfStmt):
-                condition = extractor._expr(  # pylint: disable=protected-access
+                condition = extractor.expression(
                     statement.condition,
-                    _controller_context(extractor),
+                    extractor.controller_context(),
                     allow_legacy_fallback=False,
                 )
                 walk(statement.body, conditions + [condition], seen_actions)
@@ -150,7 +146,7 @@ def _policy_call_guards(
     return unique
 
 
-def _scenario_constraints(
+def scenario_constraints(
     extractor: CertificationExtractor,
     model: EquationModel,
 ) -> tuple[list[Expr], list[Expr]]:
@@ -159,11 +155,11 @@ def _scenario_constraints(
     for constraint in extractor.parser.parsed_constraints:
         if "ScenarioConstraint" not in getattr(constraint, "metadata", []):
             continue
-        ctx = extractor._ctx(constraint.context)  # pylint: disable=protected-access
-        for conjunct in extractor._conjuncts(constraint.expression):  # pylint: disable=protected-access
+        ctx = extractor.context(constraint.context)
+        for conjunct in extractor.conjuncts(constraint.expression):
             expression = expand_definitions(
                 model,
-                extractor._expr(  # pylint: disable=protected-access
+                extractor.expression(
                     conjunct,
                     ctx,
                     allow_legacy_fallback=False,
@@ -176,7 +172,7 @@ def _scenario_constraints(
     return parameter_constraints, initial_state_constraints
 
 
-def _boolean_variables(
+def boolean_variables(
     extractor: CertificationExtractor,
     model: EquationModel,
     mdp_certificate: dict[str, Any],
@@ -188,7 +184,7 @@ def _boolean_variables(
             continue
         for attribute, type_name in part.attributes.items():
             if type_name.lower() in {"bool", "boolean"}:
-                variables.add(extractor.legacy._canon(fqn.split("::") + [attribute]))
+                variables.add(extractor.canonical_name(fqn.split("::") + [attribute]))
     interface = mdp_certificate["mdp_obligations"]["shield"].get("interface") or {}
     output_types = interface.get("output_param_types") or {}
     output_mapping = mdp_certificate["mdp_obligations"]["shield"].get(
@@ -200,7 +196,7 @@ def _boolean_variables(
     return variables & (model.state | model.actions | set(model.definitions))
 
 
-def _integer_variables(
+def integer_variables(
     extractor: CertificationExtractor,
     model: EquationModel,
 ) -> set[str]:
@@ -212,7 +208,7 @@ def _integer_variables(
         for attribute, type_name in part.attributes.items():
             if type_name.lower() == "integer":
                 variables.add(
-                    extractor.legacy._canon(fqn.split("::") + [attribute])
+                    extractor.canonical_name(fqn.split("::") + [attribute])
                 )
     return variables & (
         model.state
@@ -223,7 +219,7 @@ def _integer_variables(
     )
 
 
-def _continuous_targets(
+def continuous_targets(
     extractor: CertificationExtractor,
     model: EquationModel,
 ) -> tuple[set[str], set[str], list[dict[str, Any]]]:
@@ -231,7 +227,7 @@ def _continuous_targets(
     dt_updated: set[str] = set()
     records: list[dict[str, Any]] = []
     for action in extractor.parser.step_actions:
-        target = extractor.legacy._canon(action.target_key.split("::"))
+        target = extractor.canonical_name(action.target_key.split("::"))
         equation = model.transitions.get(target)
         if equation is None:
             continue
@@ -250,14 +246,14 @@ def _continuous_targets(
     return annotated, dt_updated, records
 
 
-def _specified_constant_values(
+def specified_constant_values(
     extractor: CertificationExtractor,
     model: EquationModel,
     dt_record: dict[str, Any],
 ) -> dict[str, Expr]:
     values: dict[str, Expr] = {}
     for parameter in extractor.parser.parameters:
-        target = extractor.legacy._canon(parameter.qualified_name.split("::"))
+        target = extractor.canonical_name(parameter.qualified_name.split("::"))
         if target not in model.constants or "ScenarioInput" in parameter.metadata:
             continue
         values[target] = Const(parameter.value)
@@ -267,7 +263,7 @@ def _specified_constant_values(
     return values
 
 
-def _timing_record(
+def timing_record(
     mdp_certificate: dict[str, Any],
     dt_record: dict[str, Any],
 ) -> dict[str, Any]:

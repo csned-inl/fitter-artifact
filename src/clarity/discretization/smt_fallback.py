@@ -16,7 +16,7 @@ from .checkers.linear_envelope import run_linear_envelope_checker
 from .model.expressions import expression_hash, raw_reference_names as _raw_reference_names
 from .model.proof_rules import expr_to_dict, expression_symbols
 from .model.reduction_types import ReducedCase
-from .analysis import _stage, _validated_attempt
+from .progression import stage_record, validated_attempt
 
 try:  # pragma: no cover - integration environment determines availability
     import z3  # type: ignore
@@ -105,7 +105,7 @@ def _core_recertification_attempts(
     ]
     attempts: list[dict[str, Any]] = []
     for checker, run in checks:
-        attempt = _validated_attempt(run())
+        attempt = validated_attempt(run())
         record = {
             "checker": checker,
             "outcome": attempt.get("outcome", "DEFERRED"),
@@ -120,7 +120,7 @@ def _core_recertification_attempts(
     return core_case, attempts, None
 
 
-def _smt_fallback(
+def run_smt_fallback(
     model: EquationModel,
     reduced_case: ReducedCase,
     *,
@@ -128,7 +128,7 @@ def _smt_fallback(
     recertification_timeout_ms: int,
 ) -> dict[str, Any]:
     if z3 is None:
-        return _stage(
+        return stage_record(
             "smt_fallback",
             "DEFERRED",
             reason_code="BLOCKED_INPUT",
@@ -137,7 +137,7 @@ def _smt_fallback(
     try:
         sorts, conflicts = infer_sorts(model)
         if conflicts:
-            return _stage(
+            return stage_record(
                 "smt_fallback",
                 "DEFERRED",
                 reason_code="UNSUPPORTED_EXPRESSION",
@@ -161,7 +161,7 @@ def _smt_fallback(
         if result == z3.unknown:
             reason = solver.reason_unknown()
             code = "TIMEOUT" if "timeout" in reason.lower() else "PROOF_REJECTED"
-            return _stage(
+            return stage_record(
                 "smt_fallback",
                 "DEFERRED",
                 reason_code=code,
@@ -217,7 +217,7 @@ def _smt_fallback(
             if certified is not None:
                 proof["certifying_checker"] = certified["checker"]
                 proof["certificate_attempt"] = certified
-                return _stage(
+                return stage_record(
                     "smt_fallback",
                     "CERTIFIED",
                     detail=(
@@ -226,7 +226,7 @@ def _smt_fallback(
                     ),
                     proof=proof,
                 )
-            return _stage(
+            return stage_record(
                 "smt_fallback",
                 "DEFERRED",
                 reason_code="PROOF_REJECTED",
@@ -247,7 +247,7 @@ def _smt_fallback(
             exact_values,
         )
         if replayed:
-            return _stage(
+            return stage_record(
                 "smt_fallback",
                 "DEFERRED",
                 reason_code="REACHABILITY_BOUND_INCONCLUSIVE",
@@ -265,7 +265,7 @@ def _smt_fallback(
                     "exact_replay": True,
                 },
             )
-        return _stage(
+        return stage_record(
             "smt_fallback",
             "DEFERRED",
             reason_code="COUNTEREXAMPLE_REPLAY_FAILED",
@@ -273,7 +273,7 @@ def _smt_fallback(
             proof={"solver_status": "sat"},
         )
     except Exception as exc:  # pragma: no cover - defensive fallback
-        return _stage(
+        return stage_record(
             "smt_fallback",
             "DEFERRED",
             reason_code="MALFORMED_OUTPUT",

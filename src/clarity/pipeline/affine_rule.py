@@ -69,7 +69,7 @@ def evaluate(model_path: Path, episodes: int, seed: int, dt: float,
             last_reward = 0.0
             requirement_violated = False
             while not done:
-                obs = _observation(env._twin._model_inputs, observation_names)
+                obs = _observation(env.model_inputs, observation_names)
                 action = int(spec_oracle(shield, obs))
                 executed = int(shield(action, obs))
                 counts["pointwise_checks"] += 1

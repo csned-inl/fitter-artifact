@@ -19,7 +19,7 @@ def collect_oracle_episode(iface, env, *, max_steps: int = 5000,
     obs_names = iface["obs_names"]
 
     def oracle_action() -> int:
-        raw_obs = env._twin._model_inputs
+        raw_obs = env.model_inputs
         missing = [name for name in obs_names if name not in raw_obs]
         if missing:
             raise KeyError(f"SysML simulation omitted neural inputs: {missing}")

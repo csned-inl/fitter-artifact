@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from copy import deepcopy
-from fractions import Fraction
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,15 +32,18 @@ from .model.proof_rules import (
 from .model.reduction import build_reduction
 from .model.reduction_types import ReducedCase
 from .obligations import (
-    _boolean_variables,
-    _continuous_targets,
-    _integer_variables,
-    _policy_call_guards,
-    _scenario_constraints,
-    _shield_expression,
-    _specified_constant_values,
-    _timing_record,
+    boolean_variables as extract_boolean_variables,
+    continuous_targets as extract_continuous_targets,
+    integer_variables as extract_integer_variables,
+    policy_call_guards as extract_policy_call_guards,
+    scenario_constraints as extract_scenario_constraints,
+    shield_expression as extract_shield_expression,
+    specified_constant_values as extract_specified_constant_values,
+    timing_record as extract_timing_record,
 )
+from .progression import attempt_stage, stage_record, validated_attempt
+from .smt_fallback import run_smt_fallback
+from .timing import canonical_dt
 
 
 
@@ -58,62 +58,6 @@ CHECKER_ORDER = [
     "relational_invariant",
     "smt_reachability",
 ]
-
-
-def canonical_dt(text: str | float) -> dict[str, Any]:
-    raw = str(text).strip()
-    value = Fraction(raw)
-    if value <= 0:
-        raise ValueError("dt must be positive")
-    return {
-        "input": raw,
-        "numerator": value.numerator,
-        "denominator": value.denominator,
-        "canonical": f"{value.numerator}/{value.denominator}",
-        "decimal": float(value),
-    }
-
-
-def _stage(
-    checker: str,
-    outcome: str,
-    *,
-    reason_code: str = "",
-    detail: str = "",
-    applicability_checks: dict[str, Any] | None = None,
-    proof: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "checker": checker,
-        "checker_version": 1,
-        "outcome": outcome,
-        "reason_code": reason_code,
-        "detail": detail,
-        "applicability_checks": applicability_checks or {},
-        "proof": proof or {},
-    }
-
-
-def _attempt_stage(checker: str, attempt: dict[str, Any]) -> dict[str, Any]:
-    return _stage(
-        checker,
-        str(attempt.get("outcome", "DEFERRED")),
-        reason_code=str(attempt.get("reason_code", "")),
-        detail=str(attempt.get("detail", "")),
-        applicability_checks=attempt.get("applicability_checks") or {},
-        proof=attempt.get("proof") or {},
-    )
-
-
-def _validated_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
-    if attempt.get("outcome") in {"CERTIFIED", "VIOLATION", "DEFERRED"}:
-        return attempt
-    return {
-        "outcome": "DEFERRED",
-        "reason_code": "MALFORMED_OUTPUT",
-        "detail": "checker returned an invalid outcome",
-        "applicability_checks": attempt.get("applicability_checks") or {},
-    }
 
 
 def _case_conjuncts(expression: Expr) -> list[Expr]:
@@ -139,72 +83,6 @@ def _expression_is_convex(expression: Expr) -> bool:
         return True
     except ProofDeferred:
         return False
-
-
-def _deduplicate_proof_certificates(
-    properties: list[dict[str, Any]],
-) -> dict[str, Any]:
-    counts: dict[str, int] = {}
-    certificates: dict[str, dict[str, Any]] = {}
-
-    def digest(value: dict[str, Any]) -> str:
-        encoded = json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
-
-    def collect(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if (
-                    key == "certificate"
-                    and isinstance(item, dict)
-                    and item.get("kind") in {
-                        "linear_infeasibility_weights_v1",
-                        "convex_dual_bound_v1",
-                    }
-                ):
-                    key_hash = digest(item)
-                    counts[key_hash] = counts.get(key_hash, 0) + 1
-                    certificates[key_hash] = item
-                else:
-                    collect(item)
-        elif isinstance(value, list):
-            for item in value:
-                collect(item)
-
-    collect(properties)
-    repeated = {
-        key: certificates[key]
-        for key in sorted(certificates)
-        if counts[key] > 1
-    }
-
-    def replace(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, item in list(value.items()):
-                if key == "certificate" and isinstance(item, dict):
-                    key_hash = digest(item)
-                    if key_hash in repeated:
-                        value[key] = {
-                            "shared_certificate_sha256": key_hash,
-                        }
-                        continue
-                replace(item)
-        elif isinstance(value, list):
-            for item in value:
-                replace(item)
-
-    replace(properties)
-    return {
-        "rule": "content_addressed_proof_certificate_pool_v1",
-        "certificates": repeated,
-        "reference_count": sum(
-            count for key, count in counts.items() if key in repeated
-        ),
-    }
 
 
 def _grouped_case_attempts(
@@ -237,7 +115,7 @@ def _grouped_case_attempts(
                 obligation,
                 expression,
             )
-            attempt = _validated_attempt(checker(group_case))
+            attempt = validated_attempt(checker(group_case))
             attempt_cache[expression_sha256] = attempt
         return attempt
 
@@ -394,17 +272,22 @@ def analyze_model(
     optimization_timeout_ms: int = 250,
     smt_timeout_ms: int = 30000,
 ) -> dict[str, Any]:
-    from .smt_fallback import _smt_fallback
-
     path = str(Path(model_path).resolve())
     dt_record = canonical_dt(dt_text)
     extractor = CertificationExtractor(path)
     model = extractor.extract()
-    boolean_variables = _boolean_variables(extractor, model, mdp_certificate)
-    integer_variables = _integer_variables(extractor, model)
-    timing = _timing_record(mdp_certificate, dt_record)
-    annotated, _dt_updated, continuous_records = _continuous_targets(extractor, model)
-    constant_values = _specified_constant_values(extractor, model, dt_record)
+    boolean_variables = extract_boolean_variables(extractor, model, mdp_certificate)
+    integer_variables = extract_integer_variables(extractor, model)
+    timing = extract_timing_record(mdp_certificate, dt_record)
+    annotated, _dt_updated, continuous_records = extract_continuous_targets(
+        extractor,
+        model,
+    )
+    constant_values = extract_specified_constant_values(
+        extractor,
+        model,
+        dt_record,
+    )
 
     blockers = [
         diagnostic.pretty()
@@ -423,11 +306,11 @@ def analyze_model(
         }
 
     try:
-        shield_expression, _shield_record = _shield_expression(
+        shield_expression, _shield_record = extract_shield_expression(
             extractor, model, mdp_certificate
         )
-        guards = _policy_call_guards(extractor, model)
-        scenario_constraints, scenario_initial_constraints = _scenario_constraints(
+        guards = extract_policy_call_guards(extractor, model)
+        scenario_constraints, scenario_initial_constraints = extract_scenario_constraints(
             extractor, model
         )
         shield_expression = substitute(shield_expression, constant_values)
@@ -486,7 +369,7 @@ def analyze_model(
                 },
                 "cases": [],
                 "progression": [
-                    _stage(
+                    stage_record(
                         checker,
                         "DEFERRED",
                         reason_code=exc.reason_code,
@@ -582,7 +465,7 @@ def analyze_model(
                         "but reachability from the declared initial state was not replayed"
                     ),
                 }
-            case_progression.append(_attempt_stage("linear", linear_attempt))
+            case_progression.append(attempt_stage("linear", linear_attempt))
             outcome = str(linear_attempt.get("outcome", "DEFERRED"))
 
             if outcome == "DEFERRED":
@@ -599,11 +482,11 @@ def analyze_model(
                             "but reachability from the declared initial state was not replayed"
                         ),
                     }
-                case_progression.append(_attempt_stage("convex", convex_attempt))
+                case_progression.append(attempt_stage("convex", convex_attempt))
                 outcome = str(convex_attempt.get("outcome", "DEFERRED"))
 
             if outcome == "DEFERRED":
-                reachability_linear = _validated_attempt(
+                reachability_linear = validated_attempt(
                     run_reachability_checker(
                         reduced_case,
                         reachability_context,
@@ -611,7 +494,7 @@ def analyze_model(
                         timeout_ms=optimization_timeout_ms,
                     )
                 )
-                case_progression.append(_attempt_stage(
+                case_progression.append(attempt_stage(
                     "reachability_linear",
                     reachability_linear,
                 ))
@@ -620,7 +503,7 @@ def analyze_model(
                 )
 
             if outcome == "DEFERRED":
-                reachability_convex = _validated_attempt(
+                reachability_convex = validated_attempt(
                     run_reachability_checker(
                         reduced_case,
                         reachability_context,
@@ -628,7 +511,7 @@ def analyze_model(
                         timeout_ms=optimization_timeout_ms,
                     )
                 )
-                case_progression.append(_attempt_stage(
+                case_progression.append(attempt_stage(
                     "reachability_convex",
                     reachability_convex,
                 ))
@@ -666,7 +549,7 @@ def analyze_model(
                             "detail": str(exc),
                         }
                 if exact_proof.get("proved"):
-                    case_progression.append(_stage(
+                    case_progression.append(stage_record(
                         "exact_symbolic",
                         "CERTIFIED",
                         applicability_checks={
@@ -680,7 +563,7 @@ def analyze_model(
                     ))
                     outcome = "CERTIFIED"
                 else:
-                    case_progression.append(_stage(
+                    case_progression.append(stage_record(
                         "exact_symbolic",
                         "DEFERRED",
                         reason_code=str(
@@ -700,7 +583,7 @@ def analyze_model(
                     outcome = "DEFERRED"
 
             if outcome == "DEFERRED":
-                smt_stage = _smt_fallback(
+                smt_stage = run_smt_fallback(
                     model,
                     reduced_case,
                     timeout_ms=smt_timeout_ms,
@@ -744,14 +627,14 @@ def analyze_model(
                 cache=shared_reachability_cache,
             )
             for reduced_case, case_record in pending_relational:
-                relational_invariant = _validated_attempt(
+                relational_invariant = validated_attempt(
                     relational_attempts.get(reduced_case.case_id, {
                         "outcome": "DEFERRED",
                         "reason_code": "MALFORMED_OUTPUT",
                         "detail": "grouped relational checker omitted the case",
                     })
                 )
-                case_record["progression"].append(_attempt_stage(
+                case_record["progression"].append(attempt_stage(
                     "relational_invariant",
                     relational_invariant,
                 ))
@@ -759,7 +642,7 @@ def analyze_model(
                     relational_invariant.get("outcome", "DEFERRED")
                 )
                 if outcome == "DEFERRED":
-                    smt_reachability = _validated_attempt(
+                    smt_reachability = validated_attempt(
                         run_smt_reachability_checker(
                             model,
                             reduced_case,
@@ -767,7 +650,7 @@ def analyze_model(
                             timeout_ms=smt_timeout_ms,
                         )
                     )
-                    case_record["progression"].append(_attempt_stage(
+                    case_record["progression"].append(attempt_stage(
                         "smt_reachability",
                         smt_reachability,
                     ))
@@ -796,7 +679,7 @@ def analyze_model(
             ]
             if not attempts:
                 continue
-            property_progression.append(_stage(
+            property_progression.append(stage_record(
                 checker,
                 (
                     "VIOLATION"
@@ -837,7 +720,6 @@ def analyze_model(
         result = "CERTIFIED"
     else:
         result = "NOT_CERTIFIED"
-    shared_proof_certificates = _deduplicate_proof_certificates(properties)
     return {
         "schema_version": 3,
         "result": result,
@@ -865,7 +747,6 @@ def analyze_model(
             "time_variables": mdp_certificate.get("sets", {}).get("time_vars", []),
         },
         "optimization_timeout_ms": int(optimization_timeout_ms),
-        "shared_proof_certificates": shared_proof_certificates,
         "shared_reachability": shared_reachability_cache.export(),
         "properties": properties,
         "blocking_diagnostics": [],

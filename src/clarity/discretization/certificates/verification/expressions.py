@@ -11,6 +11,7 @@ from clarity.certification.equations import Const, Expr, Ite, Op, RawRef, Var
 
 from .numbers import (
     LinearInequality,
+    ProofDeferred,
     exact_linear_infeasible,
     fraction_text,
     parse_fraction,

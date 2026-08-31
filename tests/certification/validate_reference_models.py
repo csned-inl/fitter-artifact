@@ -14,16 +14,16 @@ from pathlib import Path
 
 from clarity.models import models_root
 from clarity.sysml.inputs import discover_sysml
-from .certificate import (
+from clarity.certification.certificate import (
     PROFILE_OBLIGATIONS_DISCHARGED,
     build_certificate_for_path,
     check_certificate,
     load_certificate,
     write_certificate,
 )
-from .equations import Op
-from .relevance import compute_transition_closed_relevance, equation_refs
-from .strict_extract import extract_equation_model
+from clarity.certification.equations import Op
+from clarity.certification.relevance import compute_transition_closed_relevance, equation_refs
+from clarity.certification.strict_extract import extract_equation_model
 from clarity.certification.reconstruct import get_strict_model, reconstruct
 from clarity.sysml.runtime_settings import DEFAULT_DT
 

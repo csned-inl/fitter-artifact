@@ -67,25 +67,25 @@ def _evaluate(expr, values: dict, subject_var: str = ""):
 # AST helpers
 # ---------------------------------------------------------------------------
 
-def _collect_refs(expr) -> set:
+def collect_references(expr) -> set:
     refs = set()
     if isinstance(expr, RefExpr):
         refs.add(expr.path[-1])
     elif isinstance(expr, BinaryExpr):
-        refs.update(_collect_refs(expr.left))
-        refs.update(_collect_refs(expr.right))
+        refs.update(collect_references(expr.left))
+        refs.update(collect_references(expr.right))
     elif isinstance(expr, UnaryExpr):
-        refs.update(_collect_refs(expr.operand))
+        refs.update(collect_references(expr.operand))
     elif isinstance(expr, TernaryExpr):
-        refs.update(_collect_refs(expr.condition))
-        refs.update(_collect_refs(expr.true_expr))
-        refs.update(_collect_refs(expr.false_expr))
+        refs.update(collect_references(expr.condition))
+        refs.update(collect_references(expr.true_expr))
+        refs.update(collect_references(expr.false_expr))
     return refs
 
 
-def _flatten_and(expr) -> list:
+def flatten_conjunction(expr) -> list:
     if isinstance(expr, BinaryExpr) and expr.op == 'and':
-        return _flatten_and(expr.left) + _flatten_and(expr.right)
+        return flatten_conjunction(expr.left) + flatten_conjunction(expr.right)
     return [expr]
 
 
@@ -112,13 +112,13 @@ def _fixup_precedence(req_ast, out_set, const_set, subject_var):
     ignore = {subject_var} | const_set
 
     def _refs_no_outputs(expr):
-        refs = _collect_refs(expr) - ignore
+        refs = collect_references(expr) - ignore
         return refs and refs.isdisjoint(out_set)
 
     def _is_biconditional_with_output(expr):
         if isinstance(expr, BinaryExpr) and expr.op == '==':
-            left_refs = _collect_refs(expr.left) - ignore
-            right_refs = _collect_refs(expr.right) - ignore
+            left_refs = collect_references(expr.left) - ignore
+            right_refs = collect_references(expr.right) - ignore
             if right_refs & out_set:
                 return True
             if left_refs & out_set:
@@ -127,8 +127,8 @@ def _fixup_precedence(req_ast, out_set, const_set, subject_var):
 
     def _get_biconditional_parts(expr):
         """Return (comparison_side, output_side) of a biconditional."""
-        left_refs = _collect_refs(expr.left) - ignore
-        right_refs = _collect_refs(expr.right) - ignore
+        left_refs = collect_references(expr.left) - ignore
+        right_refs = collect_references(expr.right) - ignore
         if right_refs & out_set:
             return expr.left, expr.right
         if left_refs & out_set:
@@ -177,7 +177,7 @@ def _fixup_precedence(req_ast, out_set, const_set, subject_var):
     fixed_ast = _walk_fix_or(req_ast)
 
     # Pattern 1: flatten AND, merge bare comparisons into adjacent biconditionals
-    clauses = _flatten_and(fixed_ast)
+    clauses = flatten_conjunction(fixed_ast)
     merged = []
     i = 0
     while i < len(clauses):
@@ -289,7 +289,7 @@ class SpecShield:
         # Pick up controller constants not tagged #ScenarioInput
         # (e.g., toleranceMl) that appear in the requirement AST
         if self.req_ast:
-            req_refs = _collect_refs(self.req_ast)
+            req_refs = collect_references(self.req_ast)
             req_refs.discard(self.subject_var)
             missing = req_refs - in_set - out_set - set(self.unchanging.keys())
             if missing:
@@ -333,9 +333,9 @@ class SpecShield:
         self.dead_actions = set()
         self.prohibition_clauses = []
         if self.req_ast:
-            clauses = _flatten_and(self.req_ast)
+            clauses = flatten_conjunction(self.req_ast)
             for clause in clauses:
-                refs = _collect_refs(clause)
+                refs = collect_references(clause)
                 refs = {r for r in refs if r != self.subject_var}
                 if refs and refs.issubset(out_set | set(self.unchanging.keys())):
                     self.prohibition_clauses.append(clause)
@@ -376,7 +376,9 @@ class SpecShield:
                 ) from exc
         return allowed
 
-    def _requirement_action(self, obs_dict: dict) -> int:
+    def requirement_action(self, obs_dict: dict) -> int:
+        """Return the unique Boolean action required by the specification."""
+
         allowed = self.requirement_actions(obs_dict)
         if len(allowed) != 1:
             raise ValueError(
@@ -388,9 +390,9 @@ class SpecShield:
     def __call__(self, proposed_action: int, obs_dict: dict) -> int:
         """Evaluate shield decision via AST. Used only for verification."""
         if proposed_action in self.dead_actions:
-            return self._requirement_action(obs_dict)
+            return self.requirement_action(obs_dict)
         actuators = self.action_map[proposed_action]
         values = {**self.unchanging, **obs_dict, **actuators}
         if not _evaluate(self.req_ast, values, self.subject_var):
-            return self._requirement_action(obs_dict)
+            return self.requirement_action(obs_dict)
         return proposed_action

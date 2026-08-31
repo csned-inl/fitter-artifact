@@ -92,7 +92,7 @@ def collect_episode(env, composite, rng=None, greedy: bool = False,
     requirement_violated = False
     while not done:
         obs_norm = obs[None, :].astype(np.float32, copy=False)
-        raw_obs = env._twin._model_inputs
+        raw_obs = env.model_inputs
         (final_action, log_prob, value, hidden, overridden, _,
          timing_us) = composite.act(obs_norm, hidden, raw_obs,
                                     greedy=greedy, rng=rng)

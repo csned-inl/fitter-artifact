@@ -6,7 +6,7 @@ from typing import Any
 
 from clarity.certification.equations import Const, Equation, EquationModel, Expr, Op, Var
 
-from .case_reduction import _factored_obligation
+from .case_reduction import factored_obligation
 from .constraint_reduction import _normalize_constraint_expression
 from .expressions import INTERVAL_TIME, _and, expression_hash, simplify
 from .physical_reduction import (
@@ -218,12 +218,12 @@ def build_reduction(
         boolean_variables,
         interval_pre_case_removals,
     )
-    sampled_cases, sampled_coverage = _factored_obligation(
+    sampled_cases, sampled_coverage = factored_obligation(
         sampled_point_counterexample,
         equation.target,
         "sampled_point",
     )
-    interval_cases, interval_coverage = _factored_obligation(
+    interval_cases, interval_coverage = factored_obligation(
         counterexample,
         equation.target,
         "physical_interval",

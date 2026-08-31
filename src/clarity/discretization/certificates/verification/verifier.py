@@ -464,13 +464,6 @@ def verify_recorded_optimization_certificates(analysis: dict[str, Any]) -> list[
                                             {"expression": obligation_expression},
                                         )
                                     )
-                            elif attempt_rule == "exhaustive_case_split_empty_v1":
-                                if attempt.get("applicability_checks", {}).get(
-                                    "arithmetic_case_count"
-                                ) != 0:
-                                    stage_errors.append(
-                                        "empty reachability split has a nonzero case count"
-                                    )
                             elif not isinstance(certificate, dict):
                                 stage_errors.append(
                                     "reachability arithmetic certificate is missing"

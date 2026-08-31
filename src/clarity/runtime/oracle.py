@@ -129,4 +129,4 @@ def spec_oracle(spec_shield: SpecShield, obs_dict: dict):
     training time to generate (observation, action) labels for the oracle
     cloning phase.
     """
-    return spec_shield._requirement_action(obs_dict)
+    return spec_shield.requirement_action(obs_dict)

@@ -46,6 +46,10 @@ class BufferedDiscreteEnv(SysMLEnv):
             "n_actions": self.n_actions,
         }
 
+    @property
+    def base_observation_dim(self) -> int:
+        return self._base_obs_dim
+
     def _onehot(self, action: int) -> np.ndarray:
         out = np.zeros(self._n_actions, dtype=np.float32)
         if 0 <= int(action) < self._n_actions:

@@ -73,6 +73,28 @@ class SimulatorTwin:
             self._action_ready.set()  # unblock model_fn if waiting
             self._sim_thread.join(timeout=2.0)
 
+    @property
+    def parser(self) -> SysMLParser:
+        return self._parser
+
+    @property
+    def engine(self) -> SimulationEngine:
+        if self._engine is None:
+            raise RuntimeError("simulator twin has not been initialized")
+        return self._engine
+
+    @property
+    def model_inputs(self) -> dict:
+        return dict(self._model_inputs)
+
+    @property
+    def dt(self) -> float:
+        return self._dt
+
+    def stop(self) -> None:
+        """Stop the simulator thread."""
+        self._stop()
+
     def __call__(self, action: Optional[dict] = None) -> dict:
         if action is None:
             return self._reset()

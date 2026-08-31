@@ -1,21 +1,18 @@
-# About The Checker Sequence
+# About the Checker Sequence
 
-This document gives a concise example of the pipeline stages. See `README.md`
-for setup and usage.
+The artifact applies the same five stages to the thermostat, chemical mixing
+plant, and discrete cruise controller.
 
-## Cruise-Control Example
+For the cruise controller, the current neural inputs determine the immediate
+controller constraint. The stronger Markov process check proves that one prior
+observation and two prior actions reconstruct enough modeled state for the
+next step. The discretization stage then uses the full SysML physical model,
+including the quadratic drag equation, to certify all five safety properties
+throughout each interval between controller updates.
 
-- Boolean action extraction. Throttle when target speed exceeds current speed
-  by more than the tolerance and the gap is safe. Brake when current speed
-  exceeds target speed by more than the tolerance or the following gap is
-  unsafe. Otherwise coast.
-- Memoryless controller check. The current controller decision is determined
-  by the current controller inputs without past observations or previous
-  actions.
-- Provable Markov/MDP check. The modeled next step is certified with
-  the current observation, `1` past observation, and `2` previous actions.
-- Discretization safety certification. The checked controller contract is
-  proved to satisfy each extracted property between controller updates.
-- Fitted feedforward training. A small MLP consumes the certified buffer. The
-  shield extracted from the current SysML requirement is applied during
-  training and evaluation.
+The cruise model creates substantially more incidental logical structure than
+the other two models. Lazy constraint construction keeps the obligation
+factored and asks only for proof branches required by the selected checker.
+Shared reachable regions and proof subtrees are computed once and referenced
+by content hash. These mechanisms are model independent and are applied
+unchanged to all three inputs.

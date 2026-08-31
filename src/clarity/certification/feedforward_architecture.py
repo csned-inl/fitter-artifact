@@ -22,9 +22,7 @@ from clarity.sysml.parser import (
 
 
 METHOD = "sysml_comparison_output_width_v1"
-CONTINUOUS_METHOD = "sysml_comparison_real_output_width_v1"
 POLICY_CLASS = "two_equal_hidden_layer_tanh_actor_critic"
-CONTINUOUS_POLICY_CLASS = "two_equal_hidden_layer_tanh_gaussian_actor_critic"
 COMPARISON_OPS = {"<", "<=", ">", ">="}
 COMMUTATIVE_OPS = {"+", "*", "and", "or", "=="}
 
@@ -44,25 +42,6 @@ def feedforward_parameter_count(
         hidden_dim * hidden_dim
         + (input_dim + action_count + 3) * hidden_dim
         + action_count
-        + 1
-    )
-
-
-def continuous_feedforward_parameter_count(
-    input_dim: int,
-    action_dim: int,
-    hidden_dim: int,
-) -> int:
-    """Exact parameter count for ``GaussianMLPActorCritic``."""
-    input_dim = int(input_dim)
-    action_dim = int(action_dim)
-    hidden_dim = int(hidden_dim)
-    if input_dim <= 0 or action_dim <= 0 or hidden_dim <= 0:
-        raise ValueError("feedforward dimensions must be positive")
-    return (
-        hidden_dim * hidden_dim
-        + (input_dim + action_dim + 3) * hidden_dim
-        + 2 * action_dim
         + 1
     )
 
@@ -223,84 +202,6 @@ def derive_feedforward_architecture(
         "parameter_count": parameter_count,
         "parameter_bytes_float32": 4 * parameter_count,
     }
-
-
-def derive_continuous_feedforward_architecture(
-    requirement,
-    *,
-    input_dim: int,
-    action_dim: int,
-) -> dict[str, Any]:
-    """Return one continuous feedforward architecture from the requirement."""
-    boundaries, occurrences = _comparison_boundaries(requirement)
-    comparison_count = len(boundaries)
-    output_count = len(requirement.out_params)
-    if comparison_count <= 0:
-        raise ValueError("neural requirement contains no input comparison boundary")
-    if output_count != int(action_dim):
-        raise ValueError(
-            "real-valued output count does not match the action dimension: "
-            f"outputs={output_count}, action_dim={action_dim}"
-        )
-    hidden_dim = max(comparison_count, output_count)
-    parameter_count = continuous_feedforward_parameter_count(
-        input_dim, action_dim, hidden_dim
-    )
-    return {
-        "method": CONTINUOUS_METHOD,
-        "policy_class": CONTINUOUS_POLICY_CLASS,
-        "hidden_layers": [hidden_dim, hidden_dim],
-        "hidden_dim": hidden_dim,
-        "input_dim": int(input_dim),
-        "action_dim": int(action_dim),
-        "distinct_comparison_boundaries": comparison_count,
-        "comparison_occurrences": occurrences,
-        "real_output_count": output_count,
-        "comparison_boundaries": boundaries,
-        "parameter_count": parameter_count,
-        "parameter_bytes_float32": 4 * parameter_count,
-    }
-
-
-def check_continuous_feedforward_architecture(
-    architecture: dict[str, Any],
-    *,
-    input_dim: int,
-    action_dim: int,
-) -> list[str]:
-    errors: list[str] = []
-    if architecture.get("method") != CONTINUOUS_METHOD:
-        errors.append(f"unsupported continuous method={architecture.get('method')}")
-    if architecture.get("policy_class") != CONTINUOUS_POLICY_CLASS:
-        errors.append(
-            "unsupported continuous policy_class="
-            f"{architecture.get('policy_class')}"
-        )
-    hidden_dim = architecture.get("hidden_dim")
-    comparisons = architecture.get("distinct_comparison_boundaries")
-    outputs = architecture.get("real_output_count")
-    if not isinstance(comparisons, int) or comparisons <= 0:
-        errors.append(f"invalid distinct comparison count={comparisons}")
-    if outputs != int(action_dim):
-        errors.append(f"real output count does not match action_dim: {outputs}")
-    if isinstance(comparisons, int) and isinstance(outputs, int):
-        if hidden_dim != max(comparisons, outputs):
-            errors.append("continuous hidden_dim does not match structural width")
-    if architecture.get("hidden_layers") != [hidden_dim, hidden_dim]:
-        errors.append("continuous hidden layers do not match the equal-width policy")
-    if architecture.get("input_dim") != int(input_dim):
-        errors.append("continuous input_dim does not match policy input")
-    if architecture.get("action_dim") != int(action_dim):
-        errors.append("continuous action_dim does not match action space")
-    if isinstance(hidden_dim, int) and hidden_dim > 0:
-        expected = continuous_feedforward_parameter_count(
-            input_dim, action_dim, hidden_dim
-        )
-        if architecture.get("parameter_count") != expected:
-            errors.append("continuous parameter_count is incorrect")
-        if architecture.get("parameter_bytes_float32") != 4 * expected:
-            errors.append("continuous float32 byte count is incorrect")
-    return errors
 
 
 def check_feedforward_architecture(

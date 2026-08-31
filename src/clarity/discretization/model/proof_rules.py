@@ -109,56 +109,6 @@ def expand_definitions(
     return expr
 
 
-def post_state_expression(model: EquationModel, expr: Expr) -> Expr:
-    """Evaluate a property after one sampled transition.
-
-    References inside a transition equation remain references to the current
-    sampled state.  Same-cycle definitions are expanded in both places.
-    """
-
-    expr = expand_definitions(model, expr)
-
-    def visit(node: Expr) -> Expr:
-        if isinstance(node, Var) and node.name in model.state:
-            equation = model.transitions.get(node.name)
-            if equation is None:
-                return node
-            return expand_definitions(model, equation.expr)
-        if isinstance(node, Op):
-            return Op(node.op, tuple(visit(arg) for arg in node.args))
-        if isinstance(node, Ite):
-            return Ite(visit(node.cond), visit(node.then_expr), visit(node.else_expr))
-        return node
-
-    return visit(expr)
-
-
-def within_interval_expression(
-    model: EquationModel,
-    expr: Expr,
-    continuously_changing: set[str],
-) -> Expr:
-    """Evaluate held values after the update and leave changing values arbitrary."""
-
-    expr = expand_definitions(model, expr)
-
-    def visit(node: Expr) -> Expr:
-        if isinstance(node, Var) and node.name in model.state:
-            if node.name in continuously_changing:
-                return node
-            equation = model.transitions.get(node.name)
-            if equation is None:
-                return node
-            return expand_definitions(model, equation.expr)
-        if isinstance(node, Op):
-            return Op(node.op, tuple(visit(arg) for arg in node.args))
-        if isinstance(node, Ite):
-            return Ite(visit(node.cond), visit(node.then_expr), visit(node.else_expr))
-        return node
-
-    return visit(expr)
-
-
 def substitute(expr: Expr, values: dict[str, Expr]) -> Expr:
     if isinstance(expr, Var) and expr.name in values:
         return values[expr.name]

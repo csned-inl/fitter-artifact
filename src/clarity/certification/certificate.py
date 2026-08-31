@@ -400,7 +400,7 @@ def _shield_semantics_summary(
         }
 
     try:
-        from clarity.runtime.shield import SpecShield, _collect_refs, _flatten_and
+        from clarity.runtime.shield import SpecShield, collect_references, flatten_conjunction
     except Exception as exc:  # pragma: no cover - environment/configuration failure
         return {
             "status": "not_discharged",
@@ -440,30 +440,12 @@ def _shield_semantics_summary(
         and output_types.get(spec.out_params[0]) == "Real"
     )
     if continuous:
-        try:
-            from continuous_shield import ContinuousShield  # type: ignore
-            with contextlib.redirect_stdout(io.StringIO()):
-                continuous_shield = ContinuousShield(model_path)
-            continuous_details = {
-                "runtime_class": "ContinuousShield",
-                "projection": (
-                    "safe output = clamp(proposed output, interval read from the "
-                    "current SysML requirement); an empty interval is an error"
-                ),
-                "static_range": [
-                    continuous_shield.act_low,
-                    continuous_shield.act_high,
-                ],
-                "epsilon": continuous_shield.eps,
-            }
-        except Exception as exc:
-            return {
-                "status": "not_discharged",
-                "semantic_status": "continuous_shield_construction_failed",
-                "error": str(exc),
-            }
-    else:
-        continuous_details = {}
+        return {
+            "status": "not_discharged",
+            "semantic_status": "continuous_controller_archived",
+            "runtime_class": None,
+            "interface": neural,
+        }
 
     input_coverages = []
     missing_inputs = []
@@ -498,7 +480,7 @@ def _shield_semantics_summary(
             "unique_action_var": len(matches) == 1,
         })
 
-    req_refs = set(_collect_refs(spec.req_ast)) if spec.req_ast is not None else set()
+    req_refs = set(collect_references(spec.req_ast)) if spec.req_ast is not None else set()
     known_refs = (
         {spec.subject_var}
         | set(spec.in_params)
@@ -507,7 +489,7 @@ def _shield_semantics_summary(
     )
     unknown_refs = sorted(req_refs - known_refs)
     clauses = [] if spec.req_ast is None else [
-        _parser_expr_to_dict(clause) for clause in _flatten_and(spec.req_ast)
+        _parser_expr_to_dict(clause) for clause in flatten_conjunction(spec.req_ast)
     ]
 
     if spec.req_ast is None:
@@ -519,22 +501,14 @@ def _shield_semantics_summary(
     elif missing_outputs:
         semantic_status = "shield_outputs_not_mapped_to_actions"
     else:
-        semantic_status = (
-            "discharged_continuous_interval_projection"
-            if continuous
-            else "discharged_discrete_exact_ast"
-        )
+        semantic_status = "discharged_discrete_exact_ast"
 
     discharged = semantic_status.startswith("discharged_")
     return {
         "status": "discharged" if discharged else "not_discharged",
         "semantic_status": semantic_status,
-        "runtime_class": "ContinuousShield" if continuous else "SpecShield",
-        "action_space": (
-            "continuous_single_real_output"
-            if continuous
-            else "discrete_boolean_output_bitvector"
-        ),
+        "runtime_class": "SpecShield",
+        "action_space": "discrete_boolean_output_bitvector",
         "determinism_claim": (
             "executed action is a deterministic function of covered shield inputs "
             "and the policy proposed action"
@@ -553,8 +527,7 @@ def _shield_semantics_summary(
         "action_map": {
             str(action_id): spec.action_map[action_id]
             for action_id in sorted(spec.action_map)
-        } if not continuous else {},
-        "continuous_details": continuous_details,
+        },
         "predicate_ast": None if spec.req_ast is None else _parser_expr_to_dict(spec.req_ast),
         "clauses": clauses,
         "interface": neural,
@@ -1270,12 +1243,9 @@ def check_certificate(certificate: dict[str, Any], *, check_hash: bool = True) -
     if shield:
         if shield.get("status") != "discharged":
             errors.append("shield obligation is not discharged")
-        if shield.get("semantic_status") not in {
-            "discharged_discrete_exact_ast",
-            "discharged_continuous_interval_projection",
-        }:
+        if shield.get("semantic_status") != "discharged_discrete_exact_ast":
             errors.append("shield semantic status is not discharged")
-        if shield.get("runtime_class") not in {"SpecShield", "ContinuousShield"}:
+        if shield.get("runtime_class") != "SpecShield":
             errors.append("shield runtime class is not recognized")
         if shield.get("missing_input_params"):
             errors.append("shield has missing input params")

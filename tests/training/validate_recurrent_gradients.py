@@ -9,16 +9,16 @@ Tolerance: |a - n| < atol + rtol * max(|a|, |n|).  Defaults atol=1e-6,
 rtol=1e-4 are tight enough to catch real bugs (sign errors, transposes,
 wrong gate ordering) without firing on legitimate fp64 rounding.
 
-Run: python -m clarity.training.recurrent.grad_check
+Run: python tests/training/validate_recurrent_gradients.py
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from .nn import Linear, GRU, GRUCell, relu_forward, relu_backward
-from .losses import cross_entropy, ppo_update_grads
-from .policy import RecurrentActorCritic
+from clarity.training.recurrent.nn import Linear, GRU, GRUCell, relu_forward, relu_backward
+from clarity.training.recurrent.losses import cross_entropy, ppo_update_grads
+from clarity.training.recurrent.policy import RecurrentActorCritic
 
 
 EPS = 1e-5            # central-difference step in fp64

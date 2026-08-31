@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 import sys
 from pathlib import Path
@@ -37,9 +36,7 @@ from .certificate import (
     model_hash,
 )
 from .feedforward_architecture import (
-    check_continuous_feedforward_architecture,
     check_feedforward_architecture,
-    derive_continuous_feedforward_architecture,
     derive_feedforward_architecture,
 )
 
@@ -47,7 +44,6 @@ from .feedforward_architecture import (
 SCHEMA_VERSION = 1
 SPEC_KIND = "certified_reduced_mdp_architecture_v1"
 DISCRETE_SHIELD_TYPE = "program_ast_spec_shield"
-CONTINUOUS_SHIELD_TYPE = "program_ast_continuous_interval_shield"
 SHIELD_TYPE = DISCRETE_SHIELD_TYPE
 RUNTIME_SHIELD_CLASS = "SpecShield"
 
@@ -99,45 +95,32 @@ def _bool_output_space(out_params: list[tuple[str, str]]) -> bool:
 def _inspect_env(model_path: str, *, dt: float, max_steps: int) -> dict[str, Any]:
     probe = SysMLEnv(model_path, dt=dt, max_steps=max_steps, phase=1, rng_seed=0)
     try:
-        out_params = [(str(name), str(type_name)) for name, type_name in probe._out_params]
+        out_params = [(str(name), str(type_name)) for name, type_name in probe.output_parameters]
         is_discrete = _bool_output_space(out_params)
-        base = {
-            "action_kind": "discrete" if is_discrete else "continuous",
-            "observation_keys": list(probe._obs_keys),
+        if not is_discrete:
+            raise ValueError(
+                "continuous-action controllers are archived and are not part of "
+                "the active reduced-MDP pipeline"
+            )
+        return {
+            "action_kind": "discrete",
+            "observation_keys": list(probe.observation_keys),
             "base_observation_dim": int(probe.obs_dim),
             "out_params": out_params,
-            "obs_scale": float(probe._obs_scale),
+            "obs_scale": float(probe.observation_scale),
+            "action_count": int(probe.n_actions),
+            "action_map": _json_action_map(probe.action_map),
         }
-        if is_discrete:
-            base.update({
-                "action_count": int(probe.n_actions),
-                "action_map": _json_action_map(probe._action_map),
-            })
-            return base
     finally:
         probe.close()
-
-    from continuous_env import SysMLContinuousEnv
-
-    env = SysMLContinuousEnv(model_path, dt=dt, max_steps=max_steps, phase=1, rng_seed=0)
-    try:
-        base.update({
-            "act_dim": int(env.act_dim),
-            "out_names": list(env._out_names),
-        })
-        return base
-    finally:
-        env.close()
 
 
 def _layout_from_buffer(
     *,
     observation_keys: list[str],
-    action_kind: str,
     action_width: int,
     b_obs: int,
     b_act: int,
-    action_scale: float = 1.0,
 ) -> list[dict[str, Any]]:
     layout: list[dict[str, Any]] = []
     index = 0
@@ -151,53 +134,28 @@ def _layout_from_buffer(
             "encoding": "scalar_normalized_by_sysml_env",
         })
         index += 1
-    if action_kind == "continuous":
-        for lag in range(1, b_act + 1):
-            for action_index in range(action_width):
-                layout.append({
-                    "index": index,
-                    "source": "past_executed_action",
-                    "lag": lag,
-                    "action_index": action_index,
-                    "encoding": "scalar_divided_by_action_scale",
-                    "action_scale": float(action_scale),
-                    "name": f"executed_action[-{lag}][{action_index}]",
-                })
-                index += 1
-        for lag in range(1, b_obs + 1):
-            for obs_index, name in enumerate(observation_keys):
-                layout.append({
-                    "index": index,
-                    "source": "past_observation",
-                    "lag": lag,
-                    "name": name,
-                    "base_observation_index": obs_index,
-                    "encoding": "scalar_normalized_by_sysml_env",
-                })
-                index += 1
-    else:
-        for lag in range(1, b_obs + 1):
-            for obs_index, name in enumerate(observation_keys):
-                layout.append({
-                    "index": index,
-                    "source": "past_observation",
-                    "lag": lag,
-                    "name": name,
-                    "base_observation_index": obs_index,
-                    "encoding": "scalar_normalized_by_sysml_env",
-                })
-                index += 1
-        for lag in range(1, b_act + 1):
-            for action_id in range(action_width):
-                layout.append({
-                    "index": index,
-                    "source": "past_executed_action",
-                    "lag": lag,
-                    "action_id": action_id,
-                    "encoding": "one_hot",
-                    "name": f"executed_action[-{lag}]={action_id}",
-                })
-                index += 1
+    for lag in range(1, b_obs + 1):
+        for obs_index, name in enumerate(observation_keys):
+            layout.append({
+                "index": index,
+                "source": "past_observation",
+                "lag": lag,
+                "name": name,
+                "base_observation_index": obs_index,
+                "encoding": "scalar_normalized_by_sysml_env",
+            })
+            index += 1
+    for lag in range(1, b_act + 1):
+        for action_id in range(action_width):
+            layout.append({
+                "index": index,
+                "source": "past_executed_action",
+                "lag": lag,
+                "action_id": action_id,
+                "encoding": "one_hot",
+                "name": f"executed_action[-{lag}]={action_id}",
+            })
+            index += 1
     return layout
 
 
@@ -246,104 +204,48 @@ def build_reduced_mdp_spec(
     b_act = int(buffer["b_act"])
 
     env_info = _inspect_env(model_abs, dt=dt, max_steps=max_steps)
-    action_kind = env_info["action_kind"]
-    if action_kind == "discrete":
-        iface = extract_interface(model_abs)
-        shield = iface["spec_shield"]
-        action_width = int(env_info["action_count"])
-        if list(shield.action_map.keys()) != [int(k) for k in sorted(env_info["action_map"], key=int)]:
-            raise ValueError("shield and environment action spaces disagree")
-        shield_info = {
-            "type": DISCRETE_SHIELD_TYPE,
-            "runtime_class": "SpecShield",
-            "source": "SysML #NeuralRequirement AST via clarity.runtime.shield.SpecShield",
-            "obs_names": list(iface["obs_names"]),
-            "in_params": list(shield.in_params),
-            "out_params": list(shield.out_params),
-            "dead_actions": sorted(int(a) for a in shield.dead_actions),
-            "action_map": _json_action_map(shield.action_map),
-            "history_semantics": "history records executed actions after exact shield override",
-        }
-        action_space = {
-            "type": "discrete_boolean_output_bitvector",
-            "n_actions": action_width,
-            "action_names": list(iface["action_names"]),
-            "out_params": [
-                {"name": name, "type": type_name}
-                for name, type_name in env_info["out_params"]
-            ],
-            "action_map": env_info["action_map"],
-        }
-        layout_version = "current_obs_then_past_obs_then_past_executed_actions_v1"
-        action_scale = 1.0
-    else:
-        from continuous_shield import ContinuousShield
-
-        shield = ContinuousShield(model_abs)
-        action_width = int(env_info["act_dim"])
-        if action_width != 1:
-            raise ValueError(
-                "continuous reduced-MDP specs currently support exactly one real output; "
-                f"observed act_dim={action_width}"
-            )
-        action_scale = max(abs(float(shield.act_low)), abs(float(shield.act_high)))
-        if not math.isfinite(action_scale) or action_scale <= 0:
-            raise ValueError(
-                "continuous #NeuralRequirement must provide a finite nonzero action range"
-            )
-        shield_info = {
-            "type": CONTINUOUS_SHIELD_TYPE,
-            "runtime_class": "ContinuousShield",
-            "source": (
-                "SysML #NeuralRequirement AST via "
-                "rl/continuous_shield.py::ContinuousShield"
-            ),
-            "obs_names": list(env_info["observation_keys"]),
-            "in_params": list(shield.in_params),
-            "out_params": list(shield.out_params),
-            "dead_actions": [],
-            "action_map": {},
-            "static_interval": {
-                "low": float(shield.act_low),
-                "high": float(shield.act_high),
-            },
-            "history_semantics": "history records executed actions after exact shield projection",
-        }
-        action_space = {
-            "type": "continuous_single_real_output",
-            "act_dim": action_width,
-            "action_names": list(env_info["out_names"]),
-            "out_params": [
-                {"name": name, "type": type_name}
-                for name, type_name in env_info["out_params"]
-            ],
-            "action_history_encoding": "scalar_divided_by_action_scale",
-            "action_scale": float(action_scale),
-        }
-        layout_version = "current_obs_then_past_executed_actions_then_past_obs_v1"
+    iface = extract_interface(model_abs)
+    shield = iface["spec_shield"]
+    action_width = int(env_info["action_count"])
+    if list(shield.action_map.keys()) != [
+        int(key) for key in sorted(env_info["action_map"], key=int)
+    ]:
+        raise ValueError("shield and environment action spaces disagree")
+    shield_info = {
+        "type": DISCRETE_SHIELD_TYPE,
+        "runtime_class": "SpecShield",
+        "source": "SysML #NeuralRequirement AST via clarity.runtime.shield.SpecShield",
+        "obs_names": list(iface["obs_names"]),
+        "in_params": list(shield.in_params),
+        "out_params": list(shield.out_params),
+        "dead_actions": sorted(int(action) for action in shield.dead_actions),
+        "action_map": _json_action_map(shield.action_map),
+        "history_semantics": "history records executed actions after exact shield override",
+    }
+    action_space = {
+        "type": "discrete_boolean_output_bitvector",
+        "n_actions": action_width,
+        "action_names": list(iface["action_names"]),
+        "out_params": [
+            {"name": name, "type": type_name}
+            for name, type_name in env_info["out_params"]
+        ],
+        "action_map": env_info["action_map"],
+    }
+    layout_version = "current_obs_then_past_obs_then_past_executed_actions_v1"
 
     layout = _layout_from_buffer(
         observation_keys=env_info["observation_keys"],
-        action_kind=action_kind,
         action_width=action_width,
         b_obs=b_obs,
         b_act=b_act,
-        action_scale=action_scale,
     )
     input_dim = len(layout)
-    feedforward_architecture = None
-    if action_kind == "discrete":
-        feedforward_architecture = derive_feedforward_architecture(
-            shield,
-            input_dim=input_dim,
-            action_count=action_width,
-        )
-    else:
-        feedforward_architecture = derive_continuous_feedforward_architecture(
-            shield,
-            input_dim=input_dim,
-            action_dim=action_width,
-        )
+    feedforward_architecture = derive_feedforward_architecture(
+        shield,
+        input_dim=input_dim,
+        action_count=action_width,
+    )
 
     one_step = (
         certificate.get("solver_advisory", {})
@@ -408,7 +310,7 @@ def build_reduced_mdp_spec(
             "policy_class": "memoryless",
             "recurrent_state_allowed": False,
             "trainer_must_use_policy_input_layout_exactly": True,
-            "trainer_must_use_exact_program_shield": action_kind == "discrete",
+            "trainer_must_use_exact_program_shield": True,
             "trainer_must_use_exact_runtime_shield": True,
             "trainer_must_record_executed_actions_not_raw_proposals": True,
             "safe_checkpoint_selection": (
@@ -496,16 +398,6 @@ def check_reduced_mdp_spec(
         if not isinstance(action_width, int) or action_width <= 0:
             errors.append(f"invalid action count={action_width}")
             action_width = 0
-    elif action_type == "continuous_single_real_output":
-        action_width = action_space.get("act_dim")
-        if action_width != 1:
-            errors.append(f"invalid continuous act_dim={action_width}")
-            action_width = 0
-        if action_space.get("action_history_encoding") != "scalar_divided_by_action_scale":
-            errors.append("continuous action history encoding is not recorded")
-        scale = action_space.get("action_scale")
-        if not isinstance(scale, (int, float)) or scale <= 0:
-            errors.append(f"invalid continuous action_scale={scale}")
     else:
         errors.append(f"unsupported action_space.type={action_type}")
         action_width = 0
@@ -569,58 +461,12 @@ def check_reduced_mdp_spec(
                         "could not recompute feedforward architecture from SysML: "
                         f"{exc}"
                     )
-    elif action_type == "continuous_single_real_output":
-        if shield.get("type") != CONTINUOUS_SHIELD_TYPE:
-            errors.append(f"unsupported continuous shield type={shield.get('type')}")
-        if shield.get("runtime_class") != "ContinuousShield":
-            errors.append(
-                f"unsupported continuous shield runtime_class={shield.get('runtime_class')}"
-            )
-        if shield.get("history_semantics") != "history records executed actions after exact shield projection":
-            errors.append("continuous shield history semantics are not exact projection semantics")
-        interval = shield.get("static_interval", {})
-        if not isinstance(interval.get("low"), (int, float)):
-            errors.append("continuous shield static interval lacks numeric low")
-        if not isinstance(interval.get("high"), (int, float)):
-            errors.append("continuous shield static interval lacks numeric high")
-        architecture = spec.get("feedforward_architecture")
-        if not isinstance(architecture, dict):
-            errors.append("continuous spec lacks a derived feedforward architecture")
-        elif isinstance(input_dim, int) and isinstance(action_width, int):
-            errors.extend(check_continuous_feedforward_architecture(
-                architecture,
-                input_dim=input_dim,
-                action_dim=action_width,
-            ))
-            if check_files and model_path and os.path.exists(model_path):
-                try:
-                    from continuous_shield import ContinuousShield
-
-                    observed_shield = ContinuousShield(model_path)
-                    observed_architecture = derive_continuous_feedforward_architecture(
-                        observed_shield,
-                        input_dim=input_dim,
-                        action_dim=action_width,
-                    )
-                    if architecture != observed_architecture:
-                        errors.append(
-                            "continuous feedforward architecture does not match "
-                            "the SysML requirement"
-                        )
-                except Exception as exc:
-                    errors.append(
-                        "could not recompute continuous feedforward architecture "
-                        f"from SysML: {exc}"
-                    )
-
     contract = spec.get("training_contract", {})
     if contract.get("policy_class") != "memoryless":
         errors.append("training contract is not memoryless")
     if contract.get("recurrent_state_allowed") is not False:
         errors.append("training contract allows recurrent state")
-    if action_type == "discrete_boolean_output_bitvector" and (
-        contract.get("trainer_must_use_exact_program_shield") is not True
-    ):
+    if contract.get("trainer_must_use_exact_program_shield") is not True:
         errors.append("training contract does not require exact program shield")
     if contract.get("trainer_must_use_exact_runtime_shield") is not True:
         errors.append("training contract does not require exact runtime shield")

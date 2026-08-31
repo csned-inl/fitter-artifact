@@ -1,7 +1,8 @@
 """End-to-end smoke test: train the handmade RecurrentActorCritic via CE
 on a tiny synthetic recurrent task. Demonstrates that forward + backward +
 Adam actually converge — i.e. the building blocks are not just locally
-correct (per grad_check) but also work as a training stack.
+correct under the recurrent gradient validation but also work as a training
+stack.
 
 Task: at each timestep, predict the action_id encoded in a single
 "signal" obs dimension; the rest of the obs is noise. The model must

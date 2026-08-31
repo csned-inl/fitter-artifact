@@ -23,18 +23,18 @@ from typing import Any, Callable
 
 from clarity.models import models_root
 from clarity.sysml.inputs import discover_sysml
-from .certificate import (
+from clarity.certification.certificate import (
     PROFILE_OBLIGATIONS_DISCHARGED,
     build_certificate_for_path,
     check_certificate,
     load_certificate,
     write_certificate,
 )
-from .equation_reconstruct import equation_reconstruction_trace, fact_key as equation_fact_key
-from .equations import Const, Equation, EquationModel, Ite, Op, Var
-from .relevance import compute_transition_closed_relevance, equation_refs
-from .solver import MAX_SOLVER_POLYNOMIAL_DEGREE, one_step_transition_closure
-from .strict_extract import extract_equation_model
+from clarity.certification.equation_reconstruct import equation_reconstruction_trace, fact_key as equation_fact_key
+from clarity.certification.equations import Const, Equation, EquationModel, Ite, Op, Var
+from clarity.certification.relevance import compute_transition_closed_relevance, equation_refs
+from clarity.certification.solver import MAX_SOLVER_POLYNOMIAL_DEGREE, one_step_transition_closure
+from clarity.certification.strict_extract import extract_equation_model
 from clarity.certification.reconstruct import get_strict_model, reconstruct
 from clarity.sysml.runtime_settings import DEFAULT_DT
 

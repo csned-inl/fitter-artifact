@@ -31,7 +31,7 @@ class SysMLEnv:
         self._step_count = 0
         self._rng = np.random.default_rng(rng_seed)
 
-        parser = self._twin._parser
+        parser = self._twin.parser
 
         # Find #Neural action def and extract in/out params
         neural_defs = []
@@ -103,7 +103,7 @@ class SysMLEnv:
 
     def _randomize_scenario(self):
         """Sample each ScenarioInput uniformly within its constraint bounds."""
-        eng = self._twin._engine
+        eng = self._twin.engine
         for qname, info in self._scenario_inputs.items():
             lo, hi = info["lower"], info["upper"]
             if lo == hi:
@@ -138,7 +138,7 @@ class SysMLEnv:
         Phase 1: ignore safety violations (oracle pretraining).
         Phase 2: -1 terminal penalty for any safety violation.
         """
-        statuses = self._twin._engine.requirement_statuses()
+        statuses = self._twin.engine.requirement_statuses()
 
         if self.phase == 2:
             for entry in statuses.values():
@@ -176,13 +176,40 @@ class SysMLEnv:
 
         info = {"step": self._step_count, "state": state}
         if done:
-            info["statuses"] = self._twin._engine.requirement_statuses()
+            info["statuses"] = self._twin.engine.requirement_statuses()
 
         return self._state_to_obs(state), reward, done, info
 
     def close(self):
         """Clean up simulator thread."""
-        self._twin._stop()
+        self._twin.stop()
+
+    @property
+    def observation_keys(self) -> tuple[str, ...]:
+        return tuple(self._obs_keys)
+
+    @property
+    def output_parameters(self) -> tuple[tuple[str, str], ...]:
+        return tuple(self._out_params)
+
+    @property
+    def action_map(self) -> dict[int, dict[str, bool]]:
+        return {
+            action_id: dict(values)
+            for action_id, values in self._action_map.items()
+        }
+
+    @property
+    def observation_scale(self) -> float:
+        return self._obs_scale
+
+    @property
+    def model_inputs(self) -> dict:
+        return self._twin.model_inputs
+
+    @property
+    def dt(self) -> float:
+        return self._twin.dt
 
 
 # ---------------------------------------------------------------------------

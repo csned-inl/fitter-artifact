@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from clarity.discretization.certificate import (
+from clarity.discretization.certificates import (
     build_certificate,
     check_certificate,
     write_certificate,

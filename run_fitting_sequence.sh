@@ -7,5 +7,6 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/outputs/latest}"
 
 cd "$SCRIPT_DIR"
-PYTHONDONTWRITEBYTECODE=1 \
-  "$PYTHON_BIN" "$SCRIPT_DIR/src/run_fitting_sequence.py" --out-dir "$OUT_DIR" "$@"
+PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}" \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "$PYTHON_BIN" -m clarity.pipeline.runner --out-dir "$OUT_DIR" "$@"

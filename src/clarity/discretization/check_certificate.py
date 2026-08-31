@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .certificate import check_certificate, load_certificate
+from .certificates import check_certificate, load_certificate
 
 
 def main() -> int:

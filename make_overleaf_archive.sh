@@ -13,13 +13,24 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 source = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2]).resolve()
-excluded_directories = {".git", ".venv", "outputs", "__pycache__"}
+excluded_directories = {
+    ".git",
+    ".venv",
+    "backups",
+    "build",
+    "outputs",
+    "results",
+    "__pycache__",
+}
 
 output.parent.mkdir(parents=True, exist_ok=True)
 with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
     for path in sorted(source.rglob("*")):
         relative = path.relative_to(source)
-        if any(part in excluded_directories for part in relative.parts):
+        if any(
+            part in excluded_directories or part.endswith(".egg-info")
+            for part in relative.parts
+        ):
             continue
         if path.is_dir() or path.suffix == ".pyc" or path.resolve() == output:
             continue

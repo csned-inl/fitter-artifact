@@ -38,7 +38,7 @@ def generate_oracle_data(iface, env, n_samples: int, max_steps: int = 1000,
     while _need_more() and len(obs_all) < hard_cap:
         norm_obs = env.reset()
         for step in range(max_steps):
-            raw_obs = env._twin._model_inputs
+            raw_obs = env.model_inputs
             obs_dict = {name: float(raw_obs.get(name, 0)) for name in obs_names}
             discrete = spec_oracle(spec_shield, obs_dict)
             obs_all.append(norm_obs.copy())

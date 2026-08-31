@@ -214,7 +214,7 @@ def check_buffered_env(model_key: str = "mixing") -> dict:
         model_path, dt=TEST_DT, max_steps=20, phase=1,
         rng_seed=11, n_obs=2, n_act=1)
     try:
-        base = env._base_obs_dim
+        base = env.base_observation_dim
         n_actions = env.n_actions
         obs0 = env.reset()
         _assert(obs0.shape == (base + 2 * base + n_actions,),
@@ -526,7 +526,7 @@ def check_dt_propagation_and_mismatches(out_dir: Path) -> dict:
     )
     try:
         _assert(
-            env._twin._dt == NONDEFAULT_TEST_DT,
+            env.dt == NONDEFAULT_TEST_DT,
             "simulator did not receive the supplied nondefault dt",
         )
     finally:

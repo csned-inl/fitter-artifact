@@ -6,7 +6,6 @@ import hashlib
 import signal
 from contextlib import contextmanager
 from fractions import Fraction
-from itertools import count, product
 from time import monotonic
 from typing import Any
 
@@ -15,15 +14,12 @@ from clarity.certification.solver import Encoder, infer_sorts
 
 from ...certificates.replay import replay_serialized_boolean_expression, serialize_exact_value
 from ...model.expressions import (
-    _comparison_expression,
-    _split_conditionals,
     expression_hash,
     raw_reference_names as _raw_reference_names,
     simplify,
 )
 from ...model.proof_rules import (
     ProofDeferred,
-    boolean_dnf,
     expr_to_dict,
     expression_symbols,
     substitute,
@@ -36,9 +32,6 @@ except Exception:  # pragma: no cover
     z3 = None
 else:  # Proof generation must be enabled before this process creates a solver.
     z3.set_param(proof=True)
-
-
-MAX_ARITHMETIC_BRANCHES = 4096
 
 
 def _remaining_timeout_ms(deadline: float) -> int:
@@ -147,126 +140,6 @@ def _state_sequence(
             next_state[target] = simplify(substitute(with_actions, states[step]))
         states.append(next_state)
     return states, actions
-
-
-def _arithmetic_cases(
-    expression: Expr,
-    boolean_variables: set[str],
-    prefix: str,
-    context: ReachabilityContext,
-    valid_action_modes: tuple[tuple[tuple[str, bool], ...], ...],
-    *,
-    deadline: float,
-) -> list[ReducedCase]:
-    _remaining_timeout_ms(deadline)
-    used_booleans = expression_symbols(expression) & boolean_variables
-    boolean_actions = sorted(
-        set(context.action_variables) & set(context.boolean_variables)
-    )
-    step_action_groups: list[tuple[int, dict[str, str]]] = []
-    used_steps: set[int] = set()
-    if set(boolean_actions) & used_booleans:
-        used_steps.add(0)
-    for name in used_booleans:
-        if not name.startswith("reach_action_") or "__" not in name:
-            continue
-        step_text, source = name.split("__", 1)
-        step_text = step_text.removeprefix("reach_action_")
-        if step_text.isdigit() and source in boolean_actions:
-            used_steps.add(int(step_text))
-    for step in sorted(used_steps):
-        names = _step_action_names(context, step)
-        if any(names[name] in used_booleans for name in boolean_actions):
-            step_action_groups.append((step, names))
-    grouped_names = {
-        names[name]
-        for _step, names in step_action_groups
-        for name in boolean_actions
-    }
-    remaining_booleans = sorted(used_booleans - grouped_names)
-    grouped_assignments: list[list[dict[str, bool]]] = []
-    for _step, names in step_action_groups:
-        grouped_assignments.append([
-            {names[name]: value for name, value in mode}
-            for mode in valid_action_modes
-        ])
-    if not grouped_assignments:
-        grouped_assignments = [[{}]]
-    cases: list[ReducedCase] = []
-    parent_hash = expression_hash(expression)
-    index = 0
-    for selected_modes in product(*grouped_assignments):
-        _remaining_timeout_ms(deadline)
-        grouped = {
-            name: value
-            for mapping in selected_modes
-            for name, value in mapping.items()
-        }
-        for values in product((False, True), repeat=len(remaining_booleans)):
-            _remaining_timeout_ms(deadline)
-            assignment = tuple(sorted({
-                **grouped,
-                **dict(zip(remaining_booleans, values)),
-            }.items()))
-            assigned = simplify(substitute(expression, {
-                name: Const(value) for name, value in assignment
-            }))
-            for _branch_name, branch in _split_conditionals(
-                assigned,
-                limit=MAX_ARITHMETIC_BRANCHES,
-            ):
-                for comparisons in boolean_dnf(branch, boolean_variables):
-                    arithmetic = _and([
-                        _comparison_expression(item) for item in comparisons
-                    ])
-                    cases.append(ReducedCase(
-                        f"{prefix}.{index:05d}",
-                        arithmetic,
-                        parent_hash,
-                        assignment,
-                        "reachability",
-                        "reachability",
-                    ))
-                    index += 1
-                    if len(cases) > MAX_ARITHMETIC_BRANCHES:
-                        raise ProofDeferred(
-                            "INCOMPLETE_CASE_COVERAGE",
-                            f"reachability split exceeds {MAX_ARITHMETIC_BRANCHES} branches",
-                        )
-    return cases
-
-
-def _valid_action_modes(
-    context: ReachabilityContext,
-) -> tuple[tuple[tuple[str, bool], ...], ...]:
-    boolean_actions = sorted(
-        set(context.action_variables) & set(context.boolean_variables)
-    )
-    if not boolean_actions:
-        return ((),)
-    modes: list[tuple[tuple[str, bool], ...]] = []
-    remaining_booleans = set(context.boolean_variables) - set(boolean_actions)
-    for values in product((False, True), repeat=len(boolean_actions)):
-        mode = tuple(zip(boolean_actions, values))
-        assigned = simplify(substitute(context.domain, {
-            name: Const(value) for name, value in mode
-        }))
-        try:
-            infeasible = prove_implication_exact(
-                [assigned],
-                Const(False),
-                remaining_booleans,
-            ).get("proved") is True
-        except ProofDeferred:
-            infeasible = False
-        if not infeasible:
-            modes.append(mode)
-    if not modes:
-        raise ProofDeferred(
-            "BLOCKED_INPUT",
-            "the controller contract has no feasible Boolean action mode",
-        )
-    return tuple(modes)
 
 
 def _query_set(
