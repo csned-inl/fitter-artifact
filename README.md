@@ -109,11 +109,12 @@ within step semantics are missing.
 | path | role |
 |---|---|
 | `src/clarity/sysml/` | parser, simulator, discovery, and fixed `dt` handling |
-| `src/clarity/certification/` | Markov process extraction and certification |
+| `src/clarity/certification/` | Markov extraction plus separate certificate generation, schema, and checking |
 | `src/clarity/discretization/model/` | physical interval reduction |
 | `src/clarity/discretization/checkers/` | linear, convex, symbolic, and reachability methods |
 | `src/clarity/discretization/certificates/` | generation, compact storage, and independent checking |
-| `src/clarity/pipeline/` | stage entry points and complete orchestration |
+| `src/clarity/pipeline/stages/` | one implementation module for each pipeline stage |
+| `src/clarity/pipeline/` | the coordinator, shared process support, reports, and stage entry points |
 | `src/clarity/runtime/` | simulator environment, requirement oracle, and shield |
 | `src/clarity/training/` | recurrent baseline and reduced feedforward training |
 | `tests/` | validation programs, kept outside the installed package |

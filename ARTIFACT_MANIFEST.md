@@ -17,11 +17,12 @@
 |---|---|
 | `src/clarity/models/` | thermostat, chemical mixing plant, and discrete cruise controller SysML files |
 | `src/clarity/sysml/` | SysML parser, simulator, model discovery, adapter, and shared time step validation |
-| `src/clarity/certification/` | strict equation extraction, relevance, reconstruction, Markov process certificates, and reduced MDP specs |
+| `src/clarity/certification/` | strict equation extraction, relevance, reconstruction, separated Markov certificate production and checking, and reduced MDP specs |
 | `src/clarity/discretization/model/` | complete physical interval reduction and constraint normalization |
 | `src/clarity/discretization/checkers/` | linear, convex, exact symbolic, local SMT, invariant, and SMT reachability checks |
 | `src/clarity/discretization/certificates/` | certificate generation, compact content addressed storage, and independent verification |
-| `src/clarity/pipeline/` | four preprocessing stages and fitted training orchestration |
+| `src/clarity/pipeline/stages/` | independent modules for the four preprocessing stages and fitted training stage |
+| `src/clarity/pipeline/` | the pipeline coordinator, process support, report rendering, and stage entry points |
 | `src/clarity/runtime/` | environment, oracle, shield, and runtime model helpers |
 | `src/clarity/training/reduced/` | fitted feedforward policy and NumPy PPO training |
 | `src/clarity/training/recurrent/` | recurrent baseline implementation |
