@@ -119,6 +119,34 @@ class SysMLModel:
         self.R = self._build_R()
 
     # ---------- low-level ----------
+    def canonical_name(self, parts):
+        """Return the model-root-relative canonical name for a path."""
+        return self._canon(parts)
+
+    def connection_port_name(self, dotted):
+        """Return the canonical name for a dotted connection-port path."""
+        return self._pc(dotted)
+
+    def qualify_name(self, parts, context):
+        """Qualify a context-local path without following aliases."""
+        return self._qual(parts, context)
+
+    def dependency_keys(self, reference, context):
+        """Resolve and expand one reference into transition dependency keys."""
+        return self._collect_one(reference, context)
+
+    def expanded_statements(self, statements):
+        """Iterate statements with performed actions and branches expanded."""
+        return self._flatten(statements)
+
+    def actuator_decision(self, instance, trigger_port, connection_map):
+        """Return the controller decision driving a coil-write actuator."""
+        return self._actuator_decision(instance, trigger_port, connection_map)
+
+    def latch_action(self, state_machine, instance):
+        """Return the controller action latched by a state machine."""
+        return self._latch_action(state_machine, instance)
+
     def _canon(self, parts):
         return _canon(parts, self.sys)
 

@@ -68,7 +68,7 @@ class CertificationExtractor:
                     port_type, {}
                 ).items():
                     self.flow_value_types[
-                        self.legacy._canon([instance.name, port_name, attribute])
+                        self.legacy.canonical_name([instance.name, port_name, attribute])
                     ] = type_name
 
     def extract(self) -> EquationModel:
@@ -85,7 +85,7 @@ class CertificationExtractor:
 
     def canonical_name(self, path: Iterable[str]) -> str:
         """Return the equation-model name for a qualified SysML path."""
-        return self.legacy._canon(list(path))  # pylint: disable=protected-access
+        return self.legacy.canonical_name(list(path))
 
     def controller_context(self) -> list[str]:
         """Return the qualified context of the controller instance."""
@@ -149,7 +149,7 @@ class CertificationExtractor:
             if part_def is None:
                 continue
             for attribute, text in part_def.derived_attributes.items():
-                target = self.legacy._canon(
+                target = self.legacy.canonical_name(
                     [attribute] if instance_name is None
                     else [instance_name, attribute]
                 )
@@ -163,7 +163,7 @@ class CertificationExtractor:
                     self.model.initial_values[target] = expression.value
 
         for parameter in self.parser.parameters:
-            target = self.legacy._canon(parameter.qualified_name.split("::"))
+            target = self.legacy.canonical_name(parameter.qualified_name.split("::"))
             if target in self.model.state and "ScenarioInput" not in parameter.metadata:
                 self.model.initial_values[target] = parameter.value
 
@@ -203,7 +203,9 @@ class CertificationExtractor:
             inst_name = self._inst_name(fqn)
             for stmt, _cond in self._walk_effective_assigns(stmts, inst_name):
                 if self._is_instance_attribute_assignment(inst_name, stmt):
-                    self.model.state.add(self.legacy._canon([inst_name] + stmt.target))
+                    self.model.state.add(
+                        self.legacy.canonical_name([inst_name] + stmt.target)
+                    )
 
     def _ctx(self, context: str | None) -> list[str]:
         if context:
@@ -219,7 +221,7 @@ class CertificationExtractor:
         if not parts:
             return subject_var or ""
 
-        return self.legacy._qual(parts, ctx)  # pylint: disable=protected-access
+        return self.legacy.qualify_name(parts, ctx)
 
     def _is_const_key(self, key: str) -> bool:
         is_const = key in getattr(self.legacy, "consts", set())
@@ -259,7 +261,7 @@ class CertificationExtractor:
             return Var(key)
 
         try:
-            keys = self.legacy._collect_one(parts, ctx)  # pylint: disable=protected-access
+            keys = self.legacy.dependency_keys(parts, ctx)
         except Exception as exc:  # pragma: no cover - defensive diagnostic path
             self.model.add_diagnostic(
                 "error", "unresolved_ref", f"could not resolve reference {'.'.join(parts)}: {exc}"
@@ -400,14 +402,14 @@ class CertificationExtractor:
 
     def _build_binding_definitions(self) -> None:
         for lhs, rhs in sorted(self.parser.parsed_bindings.items()):
-            target = self.legacy._canon(lhs.split("::"))
-            rhs_key = self.legacy._canon(rhs.split("::"))
+            target = self.legacy.canonical_name(lhs.split("::"))
+            rhs_key = self.legacy.canonical_name(rhs.split("::"))
             if not self._is_const_key(target):
                 self._add_definition(target, Var(rhs_key), "bind")
 
     def _build_derived_attribute_definitions(self) -> None:
         for derived in self.parser.derived_attributes:
-            target = self.legacy._canon(derived.qualified_name.split("::"))
+            target = self.legacy.canonical_name(derived.qualified_name.split("::"))
             if target in self.model.state:
                 continue
             ctx = self._ctx(derived.context)
@@ -490,14 +492,14 @@ class CertificationExtractor:
 
         for derived in self.parser.derived_attributes:
             add_expr(derived.expression, self._ctx(derived.context))
-            key = self.legacy._canon(derived.qualified_name.split("::"))
+            key = self.legacy.canonical_name(derived.qualified_name.split("::"))
             if not self._is_const_key(key):
                 keys.add(key)
 
         for lhs, rhs in self.parser.parsed_bindings.items():
             for key in (
-                self.legacy._canon(lhs.split("::")),
-                self.legacy._canon(rhs.split("::")),
+                self.legacy.canonical_name(lhs.split("::")),
+                self.legacy.canonical_name(rhs.split("::")),
             ):
                 if not self._is_const_key(key):
                     keys.add(key)
@@ -532,14 +534,14 @@ class CertificationExtractor:
             attrs = self.parser.item_def_attrs.get(item_type, {})
             if attrs:
                 for attr in attrs:
-                    suffixes.add(self.legacy._canon([item_name, attr]))
+                    suffixes.add(self.legacy.canonical_name([item_name, attr]))
             else:
                 suffixes.add(item_name)
         return suffixes
 
     def _flow_suffixes(self, from_port: str, to_port: str, keys: set[str]) -> set[str]:
-        from_prefix = self.legacy._canon(from_port.split("."))
-        to_prefix = self.legacy._canon(to_port.split("."))
+        from_prefix = self.legacy.canonical_name(from_port.split("."))
+        to_prefix = self.legacy.canonical_name(to_port.split("."))
         suffixes = (
             self._keys_below_prefix(from_prefix, keys)
             | self._keys_below_prefix(to_prefix, keys)
@@ -553,8 +555,8 @@ class CertificationExtractor:
         flow_sources: dict[str, list[str]] = defaultdict(list)
 
         for flow in self.parser.flows:
-            from_prefix = self.legacy._canon(flow.from_port.split("."))
-            to_prefix = self.legacy._canon(flow.to_port.split("."))
+            from_prefix = self.legacy.canonical_name(flow.from_port.split("."))
+            to_prefix = self.legacy.canonical_name(flow.to_port.split("."))
             suffixes = self._flow_suffixes(flow.from_port, flow.to_port, referenced_keys)
             for suffix in suffixes:
                 source = f"{from_prefix}_{suffix}"
@@ -579,8 +581,8 @@ class CertificationExtractor:
     def _diagnose_multiple_flows(self) -> None:
         by_to: dict[str, list[str]] = defaultdict(list)
         for flow in self.parser.flows:
-            by_to[self.legacy._canon(flow.to_port.split("."))].append(
-                self.legacy._canon(flow.from_port.split("."))
+            by_to[self.legacy.canonical_name(flow.to_port.split("."))].append(
+                self.legacy.canonical_name(flow.from_port.split("."))
             )
         for to_port, sources in sorted(by_to.items()):
             if len(sources) > 1:
@@ -648,7 +650,7 @@ class CertificationExtractor:
 
         ctx = self.legacy.ctrl_fqn.split("::")
         for action in ctrl_def.actions:
-            for stmt in self.legacy._flatten(action.body):  # pylint: disable=protected-access
+            for stmt in self.legacy.expanded_statements(action.body):
                 if not isinstance(stmt, SubactionCallStmt) or stmt.type_name != neural_def.name:
                     continue
                 for binding in stmt.bindings:
@@ -687,7 +689,7 @@ class CertificationExtractor:
         assigned = Counter()
         performed_assigned = Counter()
         for sa in self.parser.step_actions:
-            target = self.legacy._canon(sa.target_key.split("::"))
+            target = self.legacy.canonical_name(sa.target_key.split("::"))
             assigned[target] += 1
             ctx = self._ctx(sa.context)
             rhs = self._expr(sa.expression, ctx)
@@ -713,7 +715,7 @@ class CertificationExtractor:
             for stmt, cond in self._walk_effective_assigns(stmts, inst_name):
                 if not self._is_instance_attribute_assignment(inst_name, stmt):
                     continue
-                target = self.legacy._canon([inst_name] + stmt.target)
+                target = self.legacy.canonical_name([inst_name] + stmt.target)
                 performed_assigned[target] += 1
                 if target in self.model.transitions:
                     continue
@@ -786,8 +788,8 @@ class CertificationExtractor:
     def _build_state_machine_equations(self) -> None:
         cmap = {}
         for frm, to in self.parser.connects:
-            a = self.legacy._pc(frm)  # pylint: disable=protected-access
-            b = self.legacy._pc(to)  # pylint: disable=protected-access
+            a = self.legacy.connection_port_name(frm)
+            b = self.legacy.connection_port_name(to)
             cmap[a] = b
             cmap[b] = a
 
@@ -795,7 +797,7 @@ class CertificationExtractor:
             inst = self._inst_name(fqn)
             ctx = self._ctx(fqn)
             state_changing = any(t.from_state != t.to_state for t in sm.transitions)
-            latch = self.legacy._latch_action(sm, inst)  # pylint: disable=protected-access
+            latch = self.legacy.latch_action(sm, inst)
             trig_vars = {t.trigger_var for t in sm.transitions if t.trigger_var}
             trig_port = next((t.trigger_port for t in sm.transitions if t.trigger_port), None)
 
@@ -807,10 +809,10 @@ class CertificationExtractor:
                 for stmt in transition.do_action or []:
                     if not isinstance(stmt, AssignStmt):
                         continue
-                    target = self.legacy._canon([inst] + stmt.target)
+                    target = self.legacy.canonical_name([inst] + stmt.target)
                     refs = expr_refs(stmt.expr)
                     if any(ref and ref[0] in trig_vars for ref in refs):
-                        dec = self.legacy._actuator_decision(  # pylint: disable=protected-access
+                        dec = self.legacy.actuator_decision(
                             inst, trig_port, cmap
                         )
                         if dec:
@@ -850,7 +852,7 @@ class CertificationExtractor:
             for stmt in transition.do_action or []:
                 if not isinstance(stmt, AssignStmt):
                     continue
-                target = self.legacy._canon([inst] + stmt.target)
+                target = self.legacy.canonical_name([inst] + stmt.target)
                 self.model.state.add(target)
                 expr = self._expr(stmt.expr, ctx)
                 if transition.to_state == sm.initial_state:
@@ -871,7 +873,7 @@ class CertificationExtractor:
             for stmt in transition.do_action or []:
                 if not isinstance(stmt, AssignStmt):
                     continue
-                target = self.legacy._canon([inst] + stmt.target)
+                target = self.legacy.canonical_name([inst] + stmt.target)
                 self.model.transitions[target] = Equation(
                     target=target,
                     expr=Ite(Var(latch), active_expr, initial_expr),

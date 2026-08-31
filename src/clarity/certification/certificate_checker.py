@@ -45,10 +45,10 @@ def _contains_legacy_dependency(expression: dict[str, Any]) -> bool:
     return False
 
 
-def check_certificate(
-    certificate: dict[str, Any], *, check_hash: bool = True
+def _check_schema_and_equations(
+    certificate: dict[str, Any], *, check_hash: bool
 ) -> list[str]:
-    """Return every structural or replay error found in a certificate."""
+    """Check schema, source identity, claims, diagnostics, and equations."""
     errors: list[str] = []
     if certificate.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"unsupported schema_version={certificate.get('schema_version')}")
@@ -108,6 +108,12 @@ def check_certificate(
                     f"{section} raw-ref classification conflict: {equation.get('target')}"
                 )
 
+    return errors
+
+
+def _check_theorem_gate(certificate: dict[str, Any]) -> list[str]:
+    """Check theorem gates, noninterference records, and solver evidence."""
+    errors: list[str] = []
     obligations = certificate.get("mdp_obligations", {})
     if obligations.get("overall_mdp_theorem_status") != PROFILE_OBLIGATIONS_DISCHARGED:
         errors.append(
@@ -198,6 +204,13 @@ def check_certificate(
         ):
             if solver_gate.get(key) != one_step.get(key):
                 errors.append(f"solver theorem gate/advisory mismatch: {key}")
+    return errors
+
+
+def _check_mdp_obligations(certificate: dict[str, Any]) -> list[str]:
+    """Check observation, terminal, reward, completion, and shield obligations."""
+    errors: list[str] = []
+    obligations = certificate.get("mdp_obligations", {})
     for key in (
         "observation",
         "requirement_status",
@@ -283,7 +296,12 @@ def check_certificate(
                 errors.append(f"shield output is not uniquely mapped: {item.get('param')}")
         if not shield.get("executed_action_history"):
             errors.append("shield does not record executed-action history semantics")
+    return errors
 
+
+def _check_reconstruction_trace(certificate: dict[str, Any]) -> list[str]:
+    """Replay the dependency-graph reconstruction trace."""
+    errors: list[str] = []
     proof = certificate.get("proof")
     if not proof:
         errors.append("missing proof section")
@@ -419,6 +437,21 @@ def check_certificate(
             errors.append(f"target fact not established: {target_key}")
     for missing in proof.get("missing_target_facts", []):
         errors.append(f"proof reports missing target fact: {missing}")
+
+    return errors
+
+
+def _check_equation_trace(certificate: dict[str, Any]) -> list[str]:
+    """Replay the independent equation reconstruction trace."""
+    errors: list[str] = []
+    settings = certificate.get("settings", {})
+    buffer = certificate.get("buffer") or {}
+    sets = certificate.get("sets", {})
+    b_obs = int(buffer.get("b_obs", -1))
+    b_act = int(buffer.get("b_act", -1))
+    state = set(sets.get("state", []))
+    actions = set(sets.get("actions", []))
+    time_vars = set(sets.get("time_vars", []))
 
     equation_proof = certificate.get("equation_proof")
     if not equation_proof:
@@ -565,4 +598,20 @@ def check_certificate(
     for missing in equation_proof.get("missing_target_facts", []):
         errors.append(f"equation proof reports missing target fact: {missing}")
 
+    return errors
+
+
+def check_certificate(
+    certificate: dict[str, Any], *, check_hash: bool = True
+) -> list[str]:
+    """Return every structural or replay error found in a certificate."""
+    errors = _check_schema_and_equations(
+        certificate, check_hash=check_hash
+    )
+    errors.extend(_check_theorem_gate(certificate))
+    errors.extend(_check_mdp_obligations(certificate))
+    errors.extend(_check_reconstruction_trace(certificate))
+    if not certificate.get("proof"):
+        return errors
+    errors.extend(_check_equation_trace(certificate))
     return errors
