@@ -29,6 +29,51 @@ from clarity.runtime.oracle import extract_interface
 FIXTURE = Path(__file__).parents[1] / 'discretization/fixtures/held_constant.sysml'
 
 class IntegrationTests(unittest.TestCase):
+    def test_two_feeders_preserve_the_source_inlet_sum(self):
+        path = Path(models_root()) / 'mixing-sysml-model/model.sysml'
+        parser = SysMLParser(str(path)); parser.parse()
+        engine = SimulationEngine(parser); engine.initialize()
+        for index in (1, 2):
+            engine.state[f'system::pump{index}::isRunning'] = True
+            engine.state[f'system::valve{index}::isOpen'] = True
+        engine.solver.solve(engine.current_sm_state)
+        self.assertEqual(engine.state['system::fillingTank::inlet::flowRateMl'], 20)
+        constraint = next(c for c in parser.parsed_constraints if c.name == 'fillingFillRate')
+        self.assertIs(ExpressionEvaluator(engine.state, constraint.context,
+            parser.ref_bindings, parser.system_part, strict=True).evaluate(constraint.expression), True)
+
+    def test_stable_overwrite_cannot_masquerade_as_constraint_solution(self):
+        from clarity.sysml.parser import Constraint
+        from clarity.sysml.simulator import ConstraintSolver
+        solver = ConstraintSolver({'system::x': 2}, 'system')
+        for index, value in enumerate((1, 2)):
+            text = f'x == {value}'
+            solver.add_constraint(Constraint(str(index), ExpressionParser(text).parse(), text, 'system'))
+        with self.assertRaisesRegex(ValueError, 'source constraints false after propagation'):
+            solver.solve({})
+
+    def test_mixing_completed_trace_conserves_total_volume(self):
+        from clarity.runtime.shield import SpecShield
+        path = Path(models_root()) / 'mixing-sysml-model/model.sysml'
+        parser = SysMLParser(str(path)); parser.parse()
+        engine = SimulationEngine(parser); engine.initialize()
+        shield = SpecShield(str(path))
+        decisions = []
+        def controller(inputs):
+            decisions.append(dict(inputs))
+            return shield.action_map[shield.requirement_action(inputs)]
+        engine.model = controller
+        tanks = ('feederTank1', 'feederTank2', 'fillingTank')
+        total = lambda: sum(engine.state[f'system::{name}::currentLevelMl'] for name in tanks)
+        initial_total = total()
+        for _ in range(5000):
+            engine.step(.1)
+            self.assertEqual(total(), initial_total)
+            if decisions and decisions[-1]['done']:
+                break
+        else:
+            self.fail('source controller did not complete within the existing episode bound')
+
     def source(self, change=lambda s:s):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         path = Path(directory.name) / 'model.sysml'; path.write_text(change(FIXTURE.read_text()))

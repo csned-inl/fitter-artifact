@@ -276,6 +276,10 @@ class ConstraintSolver:
             if self.state == before:
                 if unresolved:
                     raise ValueError(f"unresolved source constraints: {unresolved}")
+                # Convergence of the implementation's assignment loop does not
+                # imply that the source constraints hold. In particular, two
+                # writers can repeatedly overwrite one another each pass.
+                self._validate_constraints()
                 return
         raise ValueError(f"source constraint propagation did not converge: {unresolved}")
 
@@ -362,7 +366,28 @@ class ConstraintSolver:
         return '::'.join(path)
 
     def _propagate_flows(self):
-        """Propagate all port attribute values through flow connections."""
+        """Populate flow values not already defined by source equations.
+
+        An explicitly defined receiving value (for example the sum of two
+        feeder rates) is computed by its source constraint. Copying each input
+        onto that value would silently replace the aggregate with the last
+        visited input. Multiple inputs without such a definition are ambiguous
+        and must not be resolved by iteration order.
+        """
+        defined = set()
+        def targets(expr, context):
+            if isinstance(expr, BinaryExpr):
+                if expr.op == 'and':
+                    targets(expr.left, context); targets(expr.right, context)
+                elif expr.op == 'implies':
+                    targets(expr.right, context)
+                elif expr.op == '==' and isinstance(expr.left, RefExpr):
+                    key = self._resolve_ref_to_key(expr.left.path, context)
+                    if key:
+                        defined.add(canonical_key(self.state, key))
+        for constraint in self.constraints:
+            targets(constraint.expression, constraint.context)
+        incoming = {}
         for flow in self.flows:
             from_prefix = f"{self.system}::{flow.from_port.replace('.', '::')}::"
             to_prefix = f"{self.system}::{flow.to_port.replace('.', '::')}::"
@@ -372,9 +397,29 @@ class ConstraintSolver:
                 if key.startswith(from_prefix)
             ]
             for from_key, to_key in propagations:
+                to_key = canonical_key(self.state, to_key)
+                if to_key in defined:
+                    continue
+                incoming.setdefault(to_key, []).append(from_key)
+        for to_key, from_keys in incoming.items():
+            if len(set(from_keys)) != 1:
+                raise ValueError(f"multiple flow inputs lack a source aggregation equation: {to_key}")
+            for from_key in from_keys:
                 from_val = resolve_value(self.state, from_key)
                 if from_val is not None:
-                    self.state[canonical_key(self.state, to_key)] = from_val
+                    self.state[to_key] = from_val
+
+    def _validate_constraints(self):
+        failed = []
+        for constraint in self.constraints:
+            value = ExpressionEvaluator(
+                self.state, constraint.context, self.ref_bindings,
+                self.system, strict=True,
+            ).evaluate(constraint.expression)
+            if type(value) is not bool or not value:
+                failed.append(constraint.name)
+        if failed:
+            raise ValueError(f"source constraints false after propagation: {failed}")
 
 
 # =============================================================================
