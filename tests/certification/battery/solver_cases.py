@@ -51,6 +51,7 @@ def run_solver_cases(battery: Battery) -> None:
         state={"x", "hidden"},
         actions=set(),
         transitions={
+            "hidden": Equation("hidden", Var("hidden"), "transition", "synthetic explicit hold"),
             "x": Equation(
                 target="x",
                 expr=Var("hidden"),
@@ -130,6 +131,7 @@ def run_solver_cases(battery: Battery) -> None:
         state={"x", "hidden"},
         actions=set(),
         transitions={
+            "hidden": Equation("hidden", Var("hidden"), "transition", "synthetic explicit hold"),
             "x": Equation(
                 target="x",
                 expr=Op("*", (Var("x"), Var("hidden"))),
@@ -176,6 +178,7 @@ def run_solver_cases(battery: Battery) -> None:
             state={"x", "hidden"},
             actions=set(),
             transitions={
+                "hidden": Equation("hidden", Var("hidden"), "transition", "synthetic explicit hold"),
                 "x": Equation(
                     target="x",
                     expr=Op("*", (power_expr("x", degree - 1), Var("hidden"))),
@@ -225,6 +228,7 @@ def run_solver_cases(battery: Battery) -> None:
         state={"x", "hidden"},
         actions=set(),
         transitions={
+            "hidden": Equation("hidden", Var("hidden"), "transition", "synthetic explicit hold"),
             "x": Equation(
                 target="x",
                 expr=Op("/", (Var("x"), Var("hidden"))),

@@ -168,9 +168,27 @@ def _recheck_smt_no_solution(query: dict[str, Any]) -> list[str]:
     if not isinstance(smt2, str) or not smt2:
         return ["SMT reachability query text is missing"]
     try:
+        # A hash only authenticates the supplied text, not the obligation.
+        # Reconstruct the predicate and require the supplied query to mean it.
+        from clarity.certification.equations import EquationModel, Equation
+        from clarity.certification.solver import Encoder, infer_sorts
+        from .expressions import _factored_expr_from_dict
+        expression = _factored_expr_from_dict(query['query_expression'])
+        model = EquationModel('<replayed obligation>', expression.refs(), set())
+        model.requirements['query'] = Equation('query', expression, 'requirement')
+        sorts, conflicts = infer_sorts(model)
+        if conflicts:
+            return [f'SMT source query type conflicts: {conflicts}']
+        expected = Encoder(model, sorts).encode_expr(expression, 1, 'current')
         assertions = z3.parse_smt2_string(smt2)
         solver = z3.Solver()
-        solver.add(assertions)
+        solver.set(timeout=30000)
+        solver.add(z3.Xor(z3.And(*assertions), expected))
+        if solver.check() != z3.unsat:
+            return ['SMT text does not encode the recorded source obligation']
+        solver = z3.Solver()
+        solver.set(timeout=30000)
+        solver.add(expected)
         result = solver.check()
     except Exception as exc:  # pragma: no cover - fail-closed boundary
         return [f"SMT reachability proof replay failed: {exc}"]

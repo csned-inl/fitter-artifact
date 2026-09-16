@@ -43,7 +43,7 @@ def run_pipeline(
 ) -> dict[str, Any]:
     """Run each selected stage in order and write the complete summary."""
     if out_dir.exists():
-        shutil.rmtree(out_dir)
+        raise FileExistsError(f"fresh artifact directory required: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summary: dict[str, Any] = {
@@ -54,35 +54,48 @@ def run_pipeline(
         "stages": {},
     }
     write_json(out_dir / "sysml_inputs.json", summary["sysml_inputs"])
-    summary["stages"]["affine_rule"] = run_affine_stage(
-        out_dir, python_bin, models, dt
-    )
-    summary["stages"]["memoryless"] = run_memoryless_stage(out_dir, models)
-    summary["stages"]["markov_mdp"] = run_markov_stage(
-        out_dir, python_bin, models, dt
-    )
-    summary["stages"]["discretization_safety"] = run_discretization_stage(
-        out_dir,
-        python_bin,
-        models,
-        dt,
-        dt_text=dt_text,
-        optimization_timeout_ms=discretization_optimization_timeout_ms,
-        smt_timeout_ms=discretization_smt_timeout_ms,
-    )
-    if not preprocessing_only:
-        summary["stages"]["reduced_training"] = run_training_stage(
+    try:
+        summary["stages"]["affine_rule"] = run_affine_stage(
+            out_dir, python_bin, models, dt
+        )
+        summary["stages"]["memoryless"] = run_memoryless_stage(out_dir, models)
+        summary["stages"]["markov_mdp"] = run_markov_stage(
+            out_dir, python_bin, models, dt
+        )
+        if summary["stages"]["markov_mdp"]["result"] != "PASS":
+            raise RuntimeError("Stage 3 did not certify every source model; see saved per-model evidence")
+        summary["stages"]["discretization_safety"] = run_discretization_stage(
             out_dir,
             python_bin,
             models,
-            dt=dt,
-            smoke=smoke_training,
-            jobs=training_jobs,
-            override_tolerance=override_tolerance,
-            collection_backend=collection_backend,
-            collection_workers_per_job=collection_workers_per_job,
-            collection_start_method=collection_start_method,
+            dt,
+            dt_text=dt_text,
+            optimization_timeout_ms=discretization_optimization_timeout_ms,
+            smt_timeout_ms=discretization_smt_timeout_ms,
         )
+        if not preprocessing_only:
+            summary["stages"]["reduced_training"] = run_training_stage(
+                out_dir,
+                python_bin,
+                models,
+                dt=dt,
+                smoke=smoke_training,
+                jobs=training_jobs,
+                override_tolerance=override_tolerance,
+                collection_backend=collection_backend,
+                collection_workers_per_job=collection_workers_per_job,
+                collection_start_method=collection_start_method,
+            )
+
+    except Exception as exc:
+        summary["result"] = "FAILED"
+        summary["failure"] = {"type": type(exc).__name__, "message": str(exc)}
+        summary["unexecuted_stages"] = [name for name in
+            ('affine_rule', 'memoryless', 'markov_mdp', 'discretization_safety', 'reduced_training')
+            if name not in summary['stages']]
+        write_json(out_dir / "fitting_sequence_summary.json", summary)
+        write_report(out_dir, summary)
+        raise
 
     write_json(out_dir / "fitting_sequence_summary.json", summary)
     write_report(out_dir, summary)

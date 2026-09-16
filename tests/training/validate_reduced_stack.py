@@ -47,6 +47,8 @@ from clarity.training.reduced.composite import ProgramShieldComposite
 from clarity.training.reduced.policy import MLPActorCritic
 from clarity.training.reduced.train_one_seed import train_one_seed
 from clarity.sysml.inputs import discover_sysml
+from validate_sysml_safety import validate as validate_sysml_safety
+from validate_value_integration import validate_value_integration
 
 
 _DISCOVERED = {
@@ -669,6 +671,8 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     checks = [
+        ("value_state_integration", validate_value_integration),
+        ("sysml_safety_accounting", lambda: validate_sysml_safety(out_dir / "sysml_safety")),
         ("policy_gradients", lambda: check_policy_gradients()),
         ("ppo_direct_gradients", lambda: check_ppo_direct_gradients()),
         ("checkpoint_roundtrip", lambda: check_checkpoint_roundtrip()),

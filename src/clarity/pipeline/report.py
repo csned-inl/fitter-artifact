@@ -26,9 +26,20 @@ def write_report(out_dir: Path, summary: dict[str, Any]) -> None:
         lines.append("        -> reduced feedforward training")
     lines.append("```")
     lines.append("")
-    lines.append("The run overwrites generated outputs and rebuilds each selected stage")
+    lines.append("The run uses a fresh output directory and rebuilds each selected stage")
     lines.append("from the SysML files supplied to this run.")
     lines.append("")
+
+    if summary.get("result") == "FAILED":
+        lines += ["## Pipeline stopped", "", summary["failure"]["message"], "",
+                  "Stages with recorded results: " + ", ".join(summary["stages"]), "",
+                  "Later stages did not run. No safety certification is claimed.", ""]
+        for name, stage in summary["stages"].items():
+            lines += ["## " + name, ""]
+            if "rows" in stage and "fields" in stage:
+                lines += [markdown_table(stage["rows"], stage["fields"]), ""]
+        (out_dir / "fitting_sequence_report.md").write_text("\n".join(lines), encoding="utf-8")
+        return
 
     affine = summary["stages"]["affine_rule"]
     lines.append("## 1. Affine/Rule Fit")
@@ -39,6 +50,8 @@ def write_report(out_dir: Path, summary: dict[str, Any]) -> None:
     lines.append(markdown_table(affine["rows"], affine["fields"]))
     lines.append("")
     lines.append("Every row in this stage is generated fresh by this artifact.")
+    lines.append("Safety rates count all false system requirements from the actual SysML")
+    lines.append("expressions, including Prohibitions and Obligations, with no name filter.")
     lines.append("")
     lines.append("No learned parameters are used when the requirement itself gives the action.")
     lines.append("")
@@ -78,8 +91,10 @@ def write_report(out_dir: Path, summary: dict[str, Any]) -> None:
     discretization = summary["stages"]["discretization_safety"]
     lines.append("## 4. Discretization Safety Certification")
     lines.append("")
-    lines.append("Claim: the checked controller contract implies every extracted safety")
-    lines.append("property throughout each interval between controller updates.")
+    lines.append("The checker verifies the recorded safety obligations for the extracted")
+    lines.append("model. Known proof/runtime alignment discrepancies remain; see")
+    lines.append("`SAFETY_RESERVE_AND_SPECIFICATION_ACCOUNTING.md` before interpreting")
+    lines.append("these certificate results as a guarantee for the executable process.")
     lines.append("The stage consumes the Stage 3 certificate and the run-wide dt value.")
     lines.append("")
     lines.append(markdown_table(discretization["rows"], discretization["fields"]))
@@ -115,7 +130,8 @@ def write_report(out_dir: Path, summary: dict[str, Any]) -> None:
     lines.append("  already defines the controller.")
     lines.append("- Stage 2 removes controller recurrence for the current decision.")
     lines.append("- Stage 3 is the stronger provable Markov/MDP claim.")
-    lines.append("- Stage 4 certifies safety throughout each discretized interval.")
+    lines.append("- Stage 4 checks the extracted-model certificates; the documented")
+    lines.append("  proof/runtime alignment issues remain unresolved.")
     if training is not None:
         lines.append("- Stage 5 trains small feedforward policies from the Stage 3 specs.")
         lines.append("")

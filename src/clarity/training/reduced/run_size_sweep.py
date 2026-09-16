@@ -135,6 +135,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("model", nargs="+", help="SysML file path")
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument('--evidence-dir', type=Path, required=True,
+                    help='completed pipeline directory containing Stage 3 and 4 artifacts')
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--smoke", action="store_true",
@@ -184,7 +186,9 @@ def main() -> int:
     )
 
     jobs = [
-        Job(model.key, model.path, args.seed, out_dir, overrides)
+        Job(model.key, model.path, args.seed, out_dir, overrides + [
+            '--reduced-mdp-spec', str(args.evidence_dir / '03_markov_mdp' / 'reduced_mdp_specs' / f'{model.key}.reduced_mdp_spec.json'),
+            '--safety-certificate', str(args.evidence_dir / '04_discretization_safety' / 'certificates' / f'{model.key}.certificate.json')])
         for model in models
     ]
     rows: list[dict[str, str]] = []

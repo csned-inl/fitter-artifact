@@ -130,10 +130,14 @@ def train_one_seed(model_path: str, seed: int, seed_dir: str,
     print(f"\n  Phase 1: Oracle data collection "
           f"(target {cfg['oracle_samples']}"
           f"{', coverage>=' + str(ensure_class_coverage) if ensure_class_coverage > 0 else ''})")
-    obs_data, act_data = generate_oracle_data(
-        iface, oracle_env, cfg["oracle_samples"],
-        min_class_count=ensure_class_coverage)
-    oracle_env.close()
+    try:
+        obs_data, act_data = generate_oracle_data(
+            iface, oracle_env, cfg["oracle_samples"],
+            min_class_count=ensure_class_coverage)
+    finally:
+        with open(os.path.join(seed_dir, "oracle_requirement_accounting.json"), "w") as stream:
+            json.dump(getattr(oracle_env, "oracle_attempt_reports", []), stream, indent=2)
+        oracle_env.close()
     unique, counts = np.unique(act_data, return_counts=True)
     print(f"  Oracle data (raw): {len(act_data)} samples, "
           f"class dist: {dict(zip(unique.tolist(), counts.tolist()))}")
@@ -236,7 +240,7 @@ def train_one_seed(model_path: str, seed: int, seed_dir: str,
                 print(f"     eval ep {ep_i}: success={results.success_rate:.2f} "
                       f"override={results.pooled_override_rate:.4f} "
                       f"safety={results.safety_violation_rate:.4f}")
-                is_safe = (results.safety_violation_rate == 0.0)
+                is_safe = (results.safety_violation_rate == 0.0 and results.evaluation_error_rate == 0.0)
                 eval_history.append({
                     "episode": ep_i,
                     "success_rate": results.success_rate,
@@ -325,7 +329,9 @@ def train_one_seed(model_path: str, seed: int, seed_dir: str,
         composite=composite, n_episodes=test_episodes,
         rng=np.random.default_rng(20_000 + seed), greedy=True)
     final_checkpoint_safe = (
-        eval_summary.safety_violation_rate == 0.0
+        eval_summary.evaluation_error_rate == 0.0
+        and test_summary.evaluation_error_rate == 0.0
+        and eval_summary.safety_violation_rate == 0.0
         and test_summary.safety_violation_rate == 0.0
     )
     print(f"  Final eval summary: success={eval_summary.success_rate:.4f} "

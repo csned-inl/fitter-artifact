@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 PROOF_PROFILE = "strict_q_syntactic_reconstructibility_v1"
 PROFILE_MDP_THEOREM = "strict_q_profile_mdp_v1"
 SOLVER_BACKED_MDP_THEOREM = "strict_q_solver_backed_mdp_v1"

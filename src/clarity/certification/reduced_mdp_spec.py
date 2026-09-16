@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +42,8 @@ from .feedforward_architecture import (
 )
 
 
-SCHEMA_VERSION = 1
-SPEC_KIND = "certified_reduced_mdp_architecture_v1"
+SCHEMA_VERSION = 3
+SPEC_KIND = "certified_reduced_mdp_architecture_v3"
 DISCRETE_SHIELD_TYPE = "program_ast_spec_shield"
 SHIELD_TYPE = DISCRETE_SHIELD_TYPE
 RUNTIME_SHIELD_CLASS = "SpecShield"
@@ -260,6 +261,8 @@ def build_reduced_mdp_spec(
     }
     spec = {
         "schema_version": SCHEMA_VERSION,
+        "value_semantics": deepcopy(certificate.get("value_semantics")),
+        "execution": deepcopy(certificate.get("execution")),
         "kind": SPEC_KIND,
         "model": {
             "path": model_abs,
@@ -277,6 +280,8 @@ def build_reduced_mdp_spec(
             ),
         },
         "policy_input": {
+            "normalization_scale": env_info["obs_scale"],
+            "numeric_encoding": "IEEE754_binary32",
             "layout_version": layout_version,
             "input_dim": input_dim,
             "base_observation_dim": env_info["base_observation_dim"],
@@ -351,6 +356,11 @@ def check_reduced_mdp_spec(
         errors.append("self_sha256 does not match spec contents")
 
     model_info = spec.get("model", {})
+    if not isinstance(spec.get("execution"), dict):
+        errors.append("missing source-bound ordered execution")
+    semantics = spec.get("value_semantics")
+    if not isinstance(semantics, dict) or semantics.get("version") != 1:
+        errors.append("missing explicit physical/sampled value semantics")
     model_path = model_info.get("path")
     try:
         model_dt = validate_dt(model_info.get("dt"))
@@ -379,6 +389,17 @@ def check_reduced_mdp_spec(
             errors.append(f"certificate/spec buffer mismatch for {key}")
 
     policy_input = spec.get("policy_input", {})
+    if policy_input.get('numeric_encoding') != 'IEEE754_binary32':
+        errors.append('policy input numeric encoding is not IEEE754_binary32')
+    if check_files and model_path and os.path.isfile(model_path) and model_dt is not None:
+        from clarity.runtime.env import SysMLEnv
+        try:
+            probe = SysMLEnv(model_path, dt=model_dt)
+            if policy_input.get('normalization_scale') != probe.observation_scale:
+                errors.append('normalization scale does not match the source/dt encoding contract')
+            probe.close()
+        except (ValueError, TypeError) as exc:
+            errors.append(f'normalization contract: {exc}')
     layout = policy_input.get("layout", [])
     if not isinstance(layout, list):
         errors.append("policy_input.layout is not a list")
@@ -493,6 +514,10 @@ def check_reduced_mdp_spec(
                 if file_sha256(cert_path) != cert.get("file_sha256"):
                     errors.append("certificate file sha256 does not match spec")
                 loaded = load_certificate(cert_path)
+                if spec.get("execution") != loaded.get("execution"):
+                    errors.append("ordered execution differs from Markov certificate")
+                if semantics != loaded.get("value_semantics"):
+                    errors.append("certificate/spec physical/sampled value mismatch")
                 if sha256_bytes(canonical_json_bytes(loaded)) != cert.get("canonical_sha256"):
                     errors.append("certificate canonical sha256 does not match spec")
                 for err in check_certificate(loaded):

@@ -80,7 +80,8 @@ def _expanded_references(model: EquationModel, equation: Equation) -> set[str]:
 
 
 def _equation(model: EquationModel, name: str) -> Equation | None:
-    return model.definitions.get(name) or model.transitions.get(name)
+    return (model.definitions.get(name) or model.transitions.get(name)
+            or model.sample_events.get(name))
 
 
 def _expand_post_update(
@@ -92,6 +93,8 @@ def _expand_post_update(
 ) -> Expr:
     visited = set(seen or set())
     if isinstance(expression, Var):
+        if expression.name in model.sampled_state:
+            return expression
         if expression.name in model.definitions:
             if expression.name in visited:
                 raise ValueError(f"cyclic definition {expression.name}")
@@ -104,6 +107,9 @@ def _expand_post_update(
         if expression.name in model.state and expression.name not in continuous:
             transition = model.transitions.get(expression.name)
             if transition is not None and expression.name not in visited:
+                references = _expand_definitions(model, transition.expr).refs()
+                if references & model.state or not references & model.actions:
+                    return expression
                 return _expand_post_update(
                     model,
                     transition.expr,
@@ -371,159 +377,6 @@ def _scenario_constraints(
 
 def _is_physical_target(name: str) -> bool:
     return "time" not in name.lower()
-
-
-def _path_to_continuous(
-    model: EquationModel,
-    start: str,
-    continuous: set[str],
-) -> tuple[str, list[dict[str, Any]]] | None:
-    pending: list[tuple[str, list[dict[str, Any]]]] = [(start, [])]
-    visited: set[str] = set()
-    found: list[tuple[str, list[dict[str, Any]]]] = []
-    while pending:
-        name, path = pending.pop(0)
-        if name in visited:
-            continue
-        visited.add(name)
-        if name in continuous and name != start:
-            if _is_physical_target(name):
-                found.append((name, path))
-            continue
-        equation = _equation(model, name)
-        if equation is None:
-            continue
-        row = {
-            "target": equation.target,
-            "kind": equation.kind,
-            "source": equation.source,
-            "expression": expr_to_dict(equation.expr),
-        }
-        for reference in sorted(expression_symbols(equation.expr)):
-            if reference != name:
-                pending.append((reference, path + [row]))
-    targets = sorted({target for target, _path in found})
-    if len(targets) != 1:
-        return None
-    target = targets[0]
-    paths = [path for candidate, path in found if candidate == target]
-    paths.sort(key=lambda value: (len(value), str(value)))
-    return target, paths[0]
-
-
-def _physical_aliases(
-    model: EquationModel,
-    expressions: Iterable[Expr],
-    continuous: set[str],
-) -> tuple[dict[str, str], list[dict[str, Any]]]:
-    symbols: set[str] = set()
-    for expression in expressions:
-        symbols.update(expression_symbols(expression))
-    aliases: dict[str, str] = {}
-    records: list[dict[str, Any]] = []
-    for symbol in sorted(symbols):
-        if symbol in continuous:
-            continue
-        path = _path_to_continuous(model, symbol, continuous)
-        if path is None or not _is_physical_target(path[0]):
-            continue
-        target, equations = path
-        aliases[symbol] = target
-        records.append({
-            "sampled_value": symbol,
-            "physical_value": target,
-            "equation_path": equations,
-            "rule": "ordered_sensor_path_to_current_physical_value_v1",
-        })
-    return aliases, records
-
-
-def _reaches_target(
-    model: EquationModel,
-    expression: Expr,
-    target: str,
-    *,
-    seen: set[str] | None = None,
-) -> bool:
-    visited = set(seen or set())
-    if isinstance(expression, Var):
-        if expression.name == target:
-            return True
-        if expression.name in visited:
-            return False
-        equation = _equation(model, expression.name)
-        return bool(
-            equation
-            and _reaches_target(
-                model,
-                equation.expr,
-                target,
-                seen=visited | {expression.name},
-            )
-        )
-    if isinstance(expression, Op):
-        return any(
-            _reaches_target(model, item, target, seen=set(visited))
-            for item in expression.args
-        )
-    if isinstance(expression, Ite):
-        return any(
-            _reaches_target(model, item, target, seen=set(visited))
-            for item in (
-                expression.cond,
-                expression.then_expr,
-                expression.else_expr,
-            )
-        )
-    return False
-
-
-def _required_mapping_guards(
-    model: EquationModel,
-    sampled: str,
-    physical: str,
-) -> list[Expr]:
-    required: list[Expr] = []
-    visited: set[str] = set()
-    current = sampled
-    while current != physical and current not in visited:
-        visited.add(current)
-        equation = _equation(model, current)
-        if equation is None:
-            break
-        expression = equation.expr
-        if isinstance(expression, Ite):
-            then_reaches = _reaches_target(
-                model,
-                expression.then_expr,
-                physical,
-                seen=set(visited),
-            )
-            else_reaches = _reaches_target(
-                model,
-                expression.else_expr,
-                physical,
-                seen=set(visited),
-            )
-            if then_reaches and not else_reaches:
-                required.append(_expand_definitions(model, expression.cond))
-                expression = expression.then_expr
-            elif else_reaches and not then_reaches:
-                required.append(
-                    Op("not", (_expand_definitions(model, expression.cond),))
-                )
-                expression = expression.else_expr
-            else:
-                break
-        references = [
-            name
-            for name in sorted(expression_symbols(expression))
-            if _reaches_target(model, Var(name), physical, seen=set(visited))
-        ]
-        if len(references) != 1:
-            break
-        current = references[0]
-    return required
 
 
 def _trajectory(

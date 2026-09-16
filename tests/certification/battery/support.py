@@ -28,39 +28,39 @@ TEST_DT = DEFAULT_DT
 EXPECTED = {
     "mixing": {
         "buffer": (2, 1),
-        "state": 11,
+        "state": 15,
         "definitions": 27,
-        "transitions": 11,
-        "q": 10,
+        "transitions": 15,
+        "q": 14,
         "terminal_state_refs": {
-            "feederTank1_currentLevelMl",
-            "feederTank2_currentLevelMl",
+            "controller_volume1Res_response",
+            "controller_volume2Res_response",
         },
         "solver_status": "discharged",
     },
     "thermostat": {
         "buffer": (1, 2),
-        "state": 10,
+        "state": 11,
         "definitions": 6,
-        "transitions": 10,
-        "q": 8,
+        "transitions": 11,
+        "q": 9,
         "terminal_state_refs": {
             "controller_acOn",
             "controller_heaterOn",
-            "thermometer_temperatureReading_temperatureCelcius",
+            "controller_reading_temperatureCelcius",
         },
         "solver_status": "discharged",
     },
     "cruise-discrete": {
         "buffer": (1, 2),
-        "state": 13,
+        "state": 15,
         "definitions": 9,
-        "transitions": 13,
-        "q": 11,
+        "transitions": 15,
+        "q": 13,
         "terminal_state_refs": {
             "controller_brakeOn",
             "controller_throttleOn",
-            "speedSensor_speedReading_speedMps",
+            "controller_reading_speedMps",
         },
         "solver_status": "discharged",
     },
@@ -68,6 +68,8 @@ EXPECTED = {
 
 
 def first_closure(model: dict[str, Any], max_obs: int = 2, max_act: int = 4):
+    if set(model["STATE"]) - set(model["nsupp"]):
+        return None
     target = set(model.get("R", set())) or set(model["STATE"])
     for b_obs in range(max_obs + 1):
         for b_act in range(max_act + 1):

@@ -93,7 +93,10 @@ def validate_positive_model(
         for b_act in range(5):
             if (b_obs, b_act) >= (exp_obs, exp_act):
                 continue
-            missing, _ = reconstruct(strict_model, b_obs, b_act, horizon=8, target=target)
+            try:
+                missing, _ = reconstruct(strict_model, b_obs, b_act, horizon=8, target=target)
+            except ValueError:
+                continue  # Missing source transitions are not a successful buffer.
             if not missing:
                 prior_failures.append((b_obs, b_act))
     battery.require(
@@ -112,7 +115,7 @@ def validate_positive_model(
     )
     obligations = cert["mdp_obligations"]
     gate = cert["theorem_gate"]
-    equation_proof = cert["equation_proof"]
+    equation_proof = cert["equation_proof"] or {}
     ignored_state = set(cert["sets"]["ignored_state"])
     ignored_reasons = cert["sets"]["ignored_state_reasons"]
     one_step_solver = cert["solver_advisory"]["one_step_transition_closure"]
@@ -300,18 +303,20 @@ def run_negative_model_cases(battery: Battery) -> None:
             tmp,
             "thermostat-unparsed-requirement",
         )
-        cert = build_certificate_for_path(
-            thermostat_unparsed_requirement_path, dt=TEST_DT
-        )
-        errors = check_certificate(cert, check_hash=False)
-        blocking_codes = {d["code"] for d in cert["diagnostics"]["blocking"]}
-        battery.require(
-            "negative_model/unparsed_requirement",
-            cert["result"] != "PASS"
-            and errors
-            and "skipped_requirement_parse" in blocking_codes,
-            f"blocking={sorted(blocking_codes)} errors={errors[:3]}",
-        )
+        try:
+            build_certificate_for_path(thermostat_unparsed_requirement_path, dt=TEST_DT)
+        except ValueError as exc:
+            battery.require(
+                "negative_model/unparsed_requirement",
+                "cannot parse SysML requirement 'Heat When Cold'" in str(exc)
+                and "@unparsedRequirement" in str(exc),
+                f"source requirement rejected before certification: {exc}",
+            )
+        else:
+            battery.require(
+                "negative_model/unparsed_requirement", False,
+                "malformed source requirement was not rejected by the parser",
+            )
 
     strict_model = get_strict_model(
         MODELS["mixing"], dt=TEST_DT, enable_sampled_memory=False

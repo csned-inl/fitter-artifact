@@ -13,6 +13,21 @@ def collect_oracle_episode(iface, env, *, max_steps: int = 5000,
                            include_terminal: bool = False
                            ) -> tuple[np.ndarray, np.ndarray]:
     """Collect one full rule-labeled episode from a seeded environment."""
+    env.last_oracle_report = {'reset_seed': reset_seed, 'checks': {},
+                              'violations': [], 'errors': [], 'actions': 0}
+    try:
+        return _collect_oracle_episode(
+            iface, env, max_steps=max_steps, reset_seed=reset_seed,
+            sample_limit=sample_limit, include_terminal=include_terminal)
+    except Exception as exc:
+        report = env.last_oracle_report
+        report['outcome'] = 'ERROR'
+        report['errors'].append(f'{type(exc).__name__}: {exc}')
+        raise
+
+
+def _collect_oracle_episode(iface, env, *, max_steps, reset_seed,
+                            sample_limit, include_terminal):
     from clarity.runtime.oracle import spec_oracle
 
     spec_shield = iface["spec_shield"]
@@ -23,13 +38,29 @@ def collect_oracle_episode(iface, env, *, max_steps: int = 5000,
         missing = [name for name in obs_names if name not in raw_obs]
         if missing:
             raise KeyError(f"SysML simulation omitted neural inputs: {missing}")
-        obs_dict = {name: float(raw_obs[name]) for name in obs_names}
+        obs_dict = {name: raw_obs[name] for name in obs_names}
         return int(spec_oracle(spec_shield, obs_dict))
 
     obs_all = []
     act_all = []
-    obs = env.reset(seed=reset_seed)
-    done = False
+    from clarity.training.reduced.episode import Episode, _record_events
+    episode = Episode(); failed = set()
+    initial = env.reset_with_result(seed=reset_seed)
+    _record_events(episode, initial.events, failed)
+    env.last_oracle_report = {'reset_seed': reset_seed, 'initial_outcome': initial.outcome,
+        'violations': sorted(failed), 'checks': episode.requirement_checks,
+        'errors': episode.evaluation_errors, 'actions': 0, 'outcome': initial.outcome}
+    obs = initial.observation
+    if not hasattr(env, 'oracle_initialization_results'):
+        env.oracle_initialization_results = []
+    env.oracle_initialization_results.append({
+        'outcome': initial.outcome, 'violations': initial.violations,
+        'evaluation_errors': initial.errors, 'error': initial.error,
+    })
+    if initial.outcome == 'error':
+        env.last_oracle_report['errors'].append(initial.error or str(initial.errors))
+        raise ValueError(f'oracle initialization error: {initial.error or initial.errors}')
+    done = initial.outcome != 'decision' 
     steps = 0
     while not done and steps < max_steps:
         if sample_limit is not None and len(obs_all) >= sample_limit:
@@ -37,17 +68,22 @@ def collect_oracle_episode(iface, env, *, max_steps: int = 5000,
         action = oracle_action()
         obs_all.append(np.asarray(obs, dtype=np.float32).copy())
         act_all.append(action)
-        obs, _, done, _ = env.step(action)
+        obs, _, done, info = env.step(action)
+        _record_events(episode, info['requirement_events'], failed)
         steps += 1
+        env.last_oracle_report.update(violations=sorted(failed), actions=steps,
+                                     outcome=info['outcome'])
+        if info['outcome'] == 'ERROR':
+            raise ValueError(f"oracle execution error: {info.get('error') or info['evaluation_errors']}")
 
-    if include_terminal and (
+    if include_terminal and obs is not None and initial.outcome != "violation" and (
         sample_limit is None or len(obs_all) < sample_limit
     ):
         obs_all.append(np.asarray(obs, dtype=np.float32).copy())
         act_all.append(oracle_action())
 
     return (
-        np.asarray(obs_all, dtype=np.float32),
+        np.asarray(obs_all, dtype=np.float32).reshape((-1, env.obs_dim)),
         np.asarray(act_all, dtype=np.int64),
     )
 
@@ -74,15 +110,15 @@ def generate_oracle_data(iface, env, n_samples: int,
         return any(count < min_class_count for count in by_class.values())
 
     resets = 0
+    env.oracle_attempt_reports = []
     while need_more() and resets < max_resets:
         remaining = None if min_class_count > 0 else n_samples - len(obs_all)
-        obs_ep, act_ep = collect_oracle_episode(
-            iface,
-            env,
-            max_steps=max_steps,
-            sample_limit=remaining,
-            include_terminal=min_class_count > 0,
-        )
+        try:
+            obs_ep, act_ep = collect_oracle_episode(
+                iface, env, max_steps=max_steps, sample_limit=remaining,
+                include_terminal=min_class_count > 0)
+        finally:
+            env.oracle_attempt_reports.append(env.last_oracle_report)
         resets += 1
         for obs, action in zip(obs_ep, act_ep):
             obs_all.append(obs)

@@ -170,3 +170,18 @@ def verify_recorded_convex_certificate(certificate: dict[str, Any]) -> list[str]
     if certificate.get("global_lower_bound") != expected_bound:
         errors.append("convex certificate global lower bound is incorrect")
     return errors
+
+
+def verify_convex_source(certificate, expression):
+    """The dual weights must prove infeasibility of this obligation's constraints."""
+    from .expressions import _factored_expr_from_dict
+    from ...model.optimization import quadratic_constraints, serialize_quadratic_constraints
+    from ...model.proof_rules import ProofDeferred
+    try:
+        constraints = serialize_quadratic_constraints(quadratic_constraints(
+            _factored_expr_from_dict(expression), set()))
+    except (ValueError, TypeError, KeyError, ProofDeferred, ZeroDivisionError) as exc:
+        return [f'convex source constraints cannot be reconstructed: {exc}']
+    if constraints != certificate.get('constraints'):
+        return ['convex certificate does not match the source obligation']
+    return []

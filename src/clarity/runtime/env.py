@@ -5,11 +5,15 @@ Fully general — all structure derived from SysML extraction:
     - Observation space: Neural action in-params
     - Action space: 2^N for N boolean Neural out-params
     - Scenario randomization: bounds from #ScenarioConstraint
-    - Normalization: global scale from initial obs values
-    - Reward: requirement_statuses from the engine
+    - Normalization: fixed, source/dt-bound scale; no construction-time advancement
+    - Reward: original requirement results accumulated since initialization/last decision
 """
 
 import numpy as np
+import hashlib
+import json
+from pathlib import Path
+from clarity.runtime.requirements import ResetResult, ResetUnavailable, summarize_events
 
 from clarity.sysml.parser import SysMLParser, BinaryExpr, RefExpr, LiteralExpr, UnaryExpr
 from clarity.sysml.simulator_adapter import SimulatorTwin
@@ -17,13 +21,13 @@ from clarity.sysml.simulator_adapter import SimulatorTwin
 class SysMLEnv:
     """RL environment derived from any SysML model with a #Neural action.
 
-    All dimensions, action mappings, scenario ranges, and normalization
-    are read from the parsed SysML model — nothing is hardcoded.
+    Dimensions, actions and scenario ranges come from the source. Normalization
+    is a separately recorded training-interface setting.
     """
 
     def __init__(self, model_path: str, dt: float,
                  max_steps: int = 1200, phase: int = 1,
-                 rng_seed: int = None):
+                 rng_seed: int = None, observation_scale: float | None = None):
         self._model_path = model_path
         self._twin = SimulatorTwin(model_path, dt=dt)
         self._max_steps = max_steps
@@ -82,7 +86,9 @@ class SysMLEnv:
         self._scenario_state_bindings = _extract_scenario_state_bindings(parser)
 
         # Compute global normalization scale from initial obs
-        self._obs_scale = self._compute_obs_scale()
+        self._obs_scale = self._compute_obs_scale(observation_scale)
+        self.reset_result = None
+        self._episode_done = True
 
     @staticmethod
     def _state_value(state: dict, key: str):
@@ -90,36 +96,37 @@ class SysMLEnv:
             raise KeyError(f"SysML simulation did not produce neural input {key}")
         return state[key]
 
-    def _compute_obs_scale(self):
-        """Run one init step and use max absolute obs value as global scale."""
-        self._twin()  # reset
-        state = self._twin(self._initial_action)
-        scale = 1.0
-        for key in self._obs_keys:
-            val = self._state_value(state, key)
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
-                scale = max(scale, abs(val))
+    def _compute_obs_scale(self, supplied=None):
+        """Read a fixed encoding contract; never execute a control to choose it."""
+        if supplied is not None:
+            scale = float(supplied)
+        else:
+            digest = hashlib.sha256(Path(self._model_path).read_bytes()).hexdigest()
+            records = json.loads(Path(__file__).with_name('normalization.json').read_text())['records']
+            matches = [r for r in records if r['source_sha256'] == digest and r['dt'] == self.dt]
+            if len(matches) != 1:
+                raise ValueError('explicit observation_scale required for an unrecorded source/dt encoding')
+            scale = float(matches[0]['scale'])
+        if not np.isfinite(scale) or scale < 1.0:
+            raise ValueError('observation scale must be finite and at least one')
         return scale
 
-    def _randomize_scenario(self):
-        """Sample each ScenarioInput uniformly within its constraint bounds."""
-        eng = self._twin.engine
+    def _sample_scenario(self):
+        values = {}
         for qname, info in self._scenario_inputs.items():
-            lo, hi = info["lower"], info["upper"]
+            lo, hi = info['lower'], info['upper']
             if lo == hi:
-                eng.state[qname] = lo
+                values[qname] = lo
             elif isinstance(lo, int) and isinstance(hi, int):
-                eng.state[qname] = float(self._rng.integers(lo, hi + 1))
+                values[qname] = int(self._rng.integers(lo, hi + 1))
             else:
-                eng.state[qname] = self._rng.uniform(lo, hi)
-        # Enforce relations among sampled inputs exactly as written in SysML.
-        for greater_qname, lesser_qname in self._cross_constraints:
-            g = self._state_value(eng.state, greater_qname)
-            l = self._state_value(eng.state, lesser_qname)
-            if g < l:
-                eng.state[lesser_qname] = g
-        for state_qname, input_qname in self._scenario_state_bindings:
-            eng.state[state_qname] = self._state_value(eng.state, input_qname)
+                values[qname] = self._rng.uniform(lo, hi)
+        for greater, lesser in self._cross_constraints:
+            if values[greater] < values[lesser] + 5:
+                values[lesser] = max(values[greater] - 5, self._scenario_inputs[lesser]['lower'])
+        for state, parameter in self._scenario_state_bindings:
+            values[state] = values[parameter]
+        return values
 
     def _state_to_obs(self, state: dict) -> np.ndarray:
         """Convert twin state dict to normalized observation vector."""
@@ -132,14 +139,12 @@ class SysMLEnv:
                 obs.append(float(val) / self._obs_scale)
         return np.array(obs, dtype=np.float32)
 
-    def _compute_reward(self, state: dict) -> tuple[float, bool]:
+    def _compute_reward(self, state: dict, statuses: dict) -> tuple[float, bool]:
         """Compute reward and done flag.
 
         Phase 1: ignore safety violations (oracle pretraining).
         Phase 2: -1 terminal penalty for any safety violation.
         """
-        statuses = self._twin.engine.requirement_statuses()
-
         if self.phase == 2:
             for entry in statuses.values():
                 if not entry["status"]:
@@ -150,35 +155,58 @@ class SysMLEnv:
 
         return -0.01, False
 
-    def reset(self, seed: int | None = None) -> np.ndarray:
+    def reset_with_result(self, seed: int | None = None):
         if seed is not None:
             self._rng = np.random.default_rng(seed)
-        self._twin()
-        self._randomize_scenario()
         self._step_count = 0
-        self._twin(self._initial_action)
-        state = self._twin(self._initial_action)
-        self._step_count = 0
-        return self._state_to_obs(state)
+        self._twin.prepare(self._sample_scenario())
+        result = self._twin.start()
+        statuses = summarize_events(result.events)
+        errors = [row['errors'] for row in statuses.values() if row['errors']]
+        failed = any(row['status'] is False for row in statuses.values())
+        outcome = result.outcome
+        if errors or result.error:
+            outcome = 'error'
+        elif self.phase == 2 and failed:
+            outcome = 'violation'
+        observation = self._state_to_obs(result.state) if outcome == 'decision' else None
+        self.reset_result = ResetResult(observation, outcome, result.events, result.error)
+        self._episode_done = outcome != 'decision'
+        return self.reset_result
 
-    def step(self, action: int) -> tuple[np.ndarray, float, bool, dict]:
-        """Take one step. Returns (obs, reward, done, info)."""
-        actuators = self._action_map[action]
-        state = self._twin(actuators)
+    def reset(self, seed: int | None = None):
+        result = self.reset_with_result(seed)
+        if result.outcome != 'decision':
+            raise ResetUnavailable(result)
+        return result.observation
+
+    def step(self, action: int):
+        if self._episode_done:
+            raise RuntimeError('cannot act after terminal/error/reset failure')
+        if action not in self._action_map:
+            raise ValueError(f'unknown source action: {action}')
+        result = self._twin.advance(self._action_map[action])
         self._step_count += 1
-
-        reward, done = self._compute_reward(state)
-
-        truncated = self._step_count >= self._max_steps
-        if truncated and not done:
-            done = True
-            reward = 0.0
-
-        info = {"step": self._step_count, "state": state}
-        if done:
-            info["statuses"] = self._twin.engine.requirement_statuses()
-
-        return self._state_to_obs(state), reward, done, info
+        statuses = summarize_events(result.events)
+        errors = {name: row['errors'] for name, row in statuses.items() if row['errors']}
+        if errors or result.error:
+            reward, done, outcome = 0.0, True, 'ERROR'
+        elif self.phase == 2 and any(row['status'] is False for row in statuses.values()):
+            reward, done, outcome = -1.0, True, 'VIOLATION'
+        elif result.outcome == 'terminal':
+            reward, done, outcome = 1.0, True, 'SUCCESS'
+        else:
+            reward, done = self._compute_reward(result.state, statuses)
+            outcome = 'SUCCESS' if reward > 0 else 'RUNNING'
+        truncated = self._step_count >= self._max_steps and not done
+        if truncated:
+            reward, done, outcome = 0.0, True, 'TRUNCATED'
+        self._episode_done = done
+        info = {'step': self._step_count, 'state': result.state, 'statuses': statuses,
+                'requirement_events': result.events, 'error': result.error,
+                'evaluation_errors': errors, 'outcome': outcome, 'truncated': truncated}
+        observation = None if result.state is None else self._state_to_obs(result.state)
+        return observation, reward, done, info
 
     def close(self):
         """Clean up simulator thread."""
@@ -206,6 +234,11 @@ class SysMLEnv:
     @property
     def model_inputs(self) -> dict:
         return self._twin.model_inputs
+
+    @property
+    def state_value_pairs(self) -> list[dict]:
+        """Current physical values and held readings, without changing policy inputs."""
+        return self._twin.state_value_pairs
 
     @property
     def dt(self) -> float:

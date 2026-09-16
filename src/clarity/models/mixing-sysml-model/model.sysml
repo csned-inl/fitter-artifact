@@ -232,13 +232,13 @@ package TankFillingSystem {
         attribute toleranceMl : Integer = 2;
 
         // Last observed sensor readings (updated each scan cycle).
-        attribute observedLevel1 : Integer = 0;
-        attribute observedLevel2 : Integer = 0;
+        attribute observedLevel1 : Integer := 0;
+        attribute observedLevel2 : Integer := 0;
 
         // Scan frequency.
         attribute scanCycleFrequencyHz : Integer = 10;
-        attribute lastScanTimeSeconds : Real = 0;
-        attribute currentTimeSeconds : Real = 0;
+        attribute lastScanTimeSeconds : Real := 0;
+        attribute currentTimeSeconds : Real := 0;
 
 
         // Ports.
@@ -444,7 +444,7 @@ package TankFillingSystem {
 
         part feederTank1 : Tank {
             attribute :>> capacityMl = 150;
-            attribute :>> currentLevelMl = 150;  // starts full
+            attribute :>> currentLevelMl := 150;  // starts full
         }
 
         // Components - feeder path 2
@@ -456,12 +456,12 @@ package TankFillingSystem {
 
         part feederTank2 : Tank {
             attribute :>> capacityMl = 150;
-            attribute :>> currentLevelMl = 150;  // starts full
+            attribute :>> currentLevelMl := 150;  // starts full
         }
 
         part fillingTank : Tank {
             attribute :>> capacityMl = 300;
-            attribute :>> currentLevelMl = 0;  // starts empty
+            attribute :>> currentLevelMl := 0;  // starts empty
         }
 
         part volumeSensor1 : VolumeSensor;

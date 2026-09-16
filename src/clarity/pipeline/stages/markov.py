@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 from clarity.pipeline.support import (
-    compact_output,
     model_order,
     read_json,
     run_command,
@@ -17,59 +15,6 @@ from clarity.pipeline.support import (
 )
 from clarity.sysml.inputs import SysMLInput
 from clarity.sysml.runtime_settings import validate_dt
-
-
-def _parse_closure_text(
-    text: str,
-    models: list[SysMLInput],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    current: str | None = None
-    paths = {str(model.path): model for model in models}
-    pattern = re.compile(
-        r"last (?P<b_act>\d+) actions \+ current \+ (?P<b_obs>\d+) past obs"
-    )
-    for line in text.splitlines():
-        model = paths.get(line.strip())
-        if model is not None:
-            current = model.key
-            continue
-        match = pattern.search(line)
-        if match and current:
-            rows.append(
-                {
-                    "model": current,
-                    "stage": "markov_mdp",
-                    "b_obs": int(match.group("b_obs")),
-                    "b_act": int(match.group("b_act")),
-                    "claim": "provable Markov/MDP buffer",
-                }
-            )
-            current = None
-    order = model_order(models)
-    return sorted(rows, key=lambda row: order[row["model"]])
-
-
-def _write_closure_log(
-    log_path: Path,
-    run: dict[str, Any],
-    rows: list[dict[str, Any]],
-    raw_text: str,
-) -> None:
-    lines = [
-        f"command: {run['command']}",
-        f"returncode: {run['returncode']}",
-        "",
-        "buffer results:",
-    ]
-    for row in rows:
-        lines.append(
-            f"- {row['model']}: b_obs={row['b_obs']}, b_act={row['b_act']}; "
-            f"{row['claim']}"
-        )
-    if run["returncode"] != 0:
-        lines.extend(["", "failure tail:", compact_output(raw_text, max_lines=40)])
-    log_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def run_markov_stage(
@@ -82,31 +27,19 @@ def run_markov_stage(
     log_dir = out_dir / "logs"
     stage_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
-    closure_log = log_dir / "03_markov_mdp_buffer_check.txt"
+    # Preserve the value inventory even when the proof gate stops this stage.
+    (stage_dir / "value_semantics").mkdir(parents=True, exist_ok=True)
+    from clarity.certification.strict_extract import extract_equation_model
+    for model in models:
+        equations = extract_equation_model(str(model.path))
+        write_json(stage_dir / "value_semantics" / f"{model.key}.json", {
+            "model": str(model.path),
+            "value_semantics": equations.value_semantics,
+            "state_variables": sorted(equations.state),
+            "diagnostics": [d.pretty() for d in equations.diagnostics],
+            "certification_status": "UNVERIFIED",
+        })
     generation_log = log_dir / "03_markov_mdp_z3_generation.txt"
-    cmd = [
-        py,
-        "-m",
-        "clarity.certification.reconstruct",
-        "--max-obs",
-        "2",
-        "--max-act",
-        "4",
-        "--dt",
-        str(dt),
-        *[str(model.path) for model in models],
-    ]
-    closure_run, closure_text = run_command(cmd, closure_log, out_dir)
-    closure_rows = _parse_closure_text(closure_text, models)
-    for row in closure_rows:
-        row["dt"] = dt
-    if closure_run["returncode"] != 0 or len(closure_rows) != len(models):
-        raise RuntimeError(
-            "Markov/MDP buffer extraction did not produce one result for every "
-            f"SysML file; see {closure_log}"
-        )
-    _write_closure_log(closure_log, closure_run, closure_rows, closure_text)
-
     generation_json = stage_dir / "markov_mdp_generation.json"
     generation_cmd = [
         py,
@@ -127,7 +60,7 @@ def run_markov_stage(
     generation_run, generation_text = run_command(
         generation_cmd, generation_log, out_dir
     )
-    if generation_run["returncode"] != 0 or not generation_json.exists():
+    if not generation_json.exists():
         raise RuntimeError(f"Markov/MDP proof generation failed; see {generation_log}")
     generation_summary = read_json(generation_json)
     generation_dt = validate_dt(generation_summary.get("settings", {}).get("dt"))
@@ -188,17 +121,15 @@ def run_markov_stage(
         stage_dir / "summary.json",
         {
             "settings": {"dt": dt},
-            "closure_run": closure_run,
+            "result": "PASS" if all(row["checker"] == "passed" for row in rows) else "FAILED",
             "generation_run": generation_run,
-            "closure_rows": closure_rows,
             "generation_rows": rows,
             "certificate_policy": generation_summary.get("certificate_policy", ""),
         },
     )
     return {
-        "closure_run": closure_run,
+        "result": "PASS" if all(row["checker"] == "passed" for row in rows) else "FAILED",
         "generation_run": generation_run,
-        "closure_rows": closure_rows,
         "rows": rows,
         "fields": fields,
     }

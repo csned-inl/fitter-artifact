@@ -73,6 +73,7 @@ def _read_training_summary(path: Path) -> dict[str, Any]:
             "override_rate", selected.get("override", "")
         ),
         "test_safety": test.get("safety_violation_rate", ""),
+        "test_evaluation_errors": test.get("evaluation_error_rate", ""),
         "test_success": test.get("success_rate", ""),
         "test_override": test.get("pooled_override_rate", ""),
         "summary_json": "",
@@ -111,6 +112,8 @@ def _run_training_job(
         "4",
         "--dt",
         str(job["dt"]),
+        "--safety-certificate",
+        str(job["safety_certificate_path"]),
         "--reduced-mdp-spec",
         str(job["spec_path"]),
         "--collection-backend",
@@ -186,6 +189,7 @@ def _select_models(
             if row["model"] == model
             and row.get("status") == "trained"
             and _float_or_none(row.get("test_safety")) == 0.0
+            and _float_or_none(row.get("test_evaluation_errors")) == 0.0
         ]
         if not candidates:
             selected.append(
@@ -292,6 +296,9 @@ def run_training_stage(
             raise RuntimeError(
                 f"current run did not generate a reduced-MDP spec for {name}"
             )
+        safety_path = out_dir / "04_discretization_safety" / "certificates" / f"{name}.certificate.json"
+        from clarity.training.authorization import require_training_evidence
+        require_training_evidence(model.path, dt, spec_path, safety_path)
         architecture = _feedforward_architecture_from_spec(spec_path, dt=dt)
         architectures[name] = architecture
         hidden_dim = int(architecture["hidden_dim"])
@@ -307,6 +314,7 @@ def run_training_stage(
                 "run_dir": run_dir,
                 "log_path": log_dir / f"05_train_{name}_h{hidden_dim}.txt",
                 "spec_path": spec_path,
+                "safety_certificate_path": safety_path,
                 "overrides": discrete_overrides,
                 "collection_backend": collection_backend,
                 "collection_workers": collection_workers_per_job,
@@ -404,6 +412,10 @@ def run_training_stage(
             "selected_models": selected_rows,
         },
     )
+    unsafe = [row["model"] for row in selected_rows
+              if row.get("selection_status") != "selected"]
+    if unsafe:
+        raise RuntimeError("no safe trained candidate: " + ", ".join(unsafe))
     return {
         "runs": runs,
         "rows": rows,

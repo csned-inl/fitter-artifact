@@ -1,18 +1,28 @@
-# About the Checker Sequence
+# Controller Simplification Sequence
 
-The artifact applies the same five stages to the thermostat, chemical mixing
-plant, and discrete cruise controller.
+The cruise controller illustrates the relationship between the five stages.
+See `README.md` for setup and execution and
+`DISCRETIZATION_CERTIFICATION_DESIGN.md` for the Stage 4 method.
 
-For the cruise controller, the current neural inputs determine the immediate
-controller constraint. The stronger Markov process check proves that one prior
-observation and two prior actions reconstruct enough modeled state for the
-next step. The discretization stage then uses the full SysML physical model,
-including the quadratic drag equation, to certify all five safety properties
-throughout each interval between controller updates.
+Its `#NeuralRequirement` applies throttle when the target speed exceeds the
+current speed by more than the tolerance and the following gap is safe. It
+applies the brake when the current speed exceeds the target by more than the
+tolerance or the gap is unsafe. Otherwise both outputs are false and the
+vehicle coasts, while the contract prohibits simultaneous throttle and brake.
+Direct extraction evaluates these rules without learning, and the memoryless
+check establishes that the current inputs determine the immediate controller
+constraint without prior observations or actions.
 
-The cruise model creates substantially more incidental logical structure than
-the other two models. Lazy constraint construction keeps the obligation
-factored and asks only for proof branches required by the selected checker.
-Shared reachable regions and proof subtrees are computed once and referenced
-by content hash. These mechanisms are model independent and are applied
-unchanged to all three inputs.
+That immediate result does not make the complete process Markov. The stronger
+check proves that one prior observation and two prior executed actions
+reconstruct enough modeled state to determine the next sampled step. It writes
+the certificate and reduced MDP specification used by the later stages.
+
+The sensor equations connect the readings to physical speed and following gap,
+and the actuator equations map the Boolean outputs to the action held over the
+next physical interval. Discretization certification combines these equations,
+the controller contract, and the fixed `dt` to check the system requirements
+throughout that interval. After certification, a small feedforward architecture
+derived from the requirement structure is trained from the reduced MDP
+specification and executed with the shield extracted from the original
+controller contract.

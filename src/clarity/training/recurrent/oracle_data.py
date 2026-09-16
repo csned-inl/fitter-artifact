@@ -35,21 +35,51 @@ def generate_oracle_data(iface, env, n_samples: int, max_steps: int = 1000,
         c = Counter(act_all)
         return any(v < min_class_count for v in c.values())
 
-    while _need_more() and len(obs_all) < hard_cap:
-        norm_obs = env.reset()
-        for step in range(max_steps):
-            raw_obs = env.model_inputs
-            obs_dict = {name: float(raw_obs.get(name, 0)) for name in obs_names}
-            discrete = spec_oracle(spec_shield, obs_dict)
-            obs_all.append(norm_obs.copy())
-            act_all.append(discrete)
-            if min_class_count <= 0 and len(obs_all) >= n_samples:
-                break
-            if len(obs_all) >= hard_cap:
-                break
-            norm_obs, reward, done, info = env.step(discrete)
-            if done:
-                break
+    env.oracle_attempt_reports = []
+    report = None
+    try:
+        while _need_more() and len(obs_all) < hard_cap:
+            from clarity.training.reduced.episode import Episode, _record_events
+            episode = Episode()
+            failed = set()
+            report = {'checks': episode.requirement_checks, 'violations': [],
+                      'errors': episode.evaluation_errors, 'actions': 0}
+            env.oracle_attempt_reports.append(report)
+            initial = env.reset_with_result()
+            _record_events(episode, initial.events, failed)
+            report.update(initial_outcome=initial.outcome, outcome=initial.outcome,
+                          violations=sorted(failed))
+            if not hasattr(env, 'oracle_initialization_results'):
+                env.oracle_initialization_results = []
+            env.oracle_initialization_results.append({
+                'outcome': initial.outcome, 'violations': initial.violations,
+                'errors': initial.errors, 'error': initial.error})
+            if initial.outcome != 'decision':
+                raise RuntimeError(f'oracle cannot collect requested samples: reset {initial.outcome}; '
+                                   f'violations={initial.violations}, errors={initial.errors}')
+            norm_obs = initial.observation
+            for step in range(max_steps):
+                raw_obs = env.model_inputs
+                obs_dict = {name: raw_obs[name] for name in obs_names}
+                discrete = spec_oracle(spec_shield, obs_dict)
+                obs_all.append(norm_obs.copy())
+                act_all.append(discrete)
+                if min_class_count <= 0 and len(obs_all) >= n_samples:
+                    break
+                if len(obs_all) >= hard_cap:
+                    break
+                norm_obs, reward, done, info = env.step(discrete)
+                _record_events(episode, info['requirement_events'], failed)
+                report.update(actions=step + 1, outcome=info['outcome'], violations=sorted(failed))
+                if info.get('outcome') == 'ERROR':
+                    raise RuntimeError(f"oracle execution error: {info.get('error') or info.get('evaluation_errors')}")
+                if done:
+                    break
+    except Exception as exc:
+        if report is not None:
+            report['outcome'] = 'ERROR'
+            report['errors'].append(f'{type(exc).__name__}: {exc}')
+        raise
 
     if min_class_count <= 0:
         obs_arr = np.array(obs_all[:n_samples], dtype=np.float32)

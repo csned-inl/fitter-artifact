@@ -6,7 +6,7 @@ from typing import Any
 
 from clarity.certification.equations import Const, Op
 
-from .convex import verify_recorded_convex_certificate
+from .convex import verify_recorded_convex_certificate, verify_convex_source
 from .expressions import (
     _affine_interval_endpoint_split,
     _factored_and,
@@ -54,7 +54,7 @@ def _verify_nested_factored_attempt(
     if checker == "convex":
         if not isinstance(certificate, dict):
             return ["factored convex proof certificate is missing"]
-        return verify_recorded_convex_certificate(certificate)
+        return verify_recorded_convex_certificate(certificate) + verify_convex_source(certificate, expression)
     return ["factored proof checker is unsupported"]
 
 
@@ -84,18 +84,23 @@ def _verify_lazy_factored_stage(
     boolean_variables = set(boolean_variables_record)
     certified: set[str] = set()
 
-    def visit(node: Any) -> None:
+    def visit(node: Any, expected: Any) -> None:
         if not isinstance(node, dict):
             errors.append("factored proof node is malformed")
             return
         rule = node.get("rule")
         if rule == "reused_factored_proof_v1":
             reference = node.get("expression_sha256")
+            if reference != _serialized_expression_hash(expected):
+                errors.append('factored reused proof has the wrong obligation')
             if reference not in certified:
                 errors.append("factored proof reuse has no prior certified node")
             return
         expression = node.get("expression")
         expression_hash = node.get("expression_sha256")
+        if expression != expected:
+            errors.append('factored child proof does not match the expected obligation')
+            return
         if not isinstance(expression, dict) or expression_hash != (
             _serialized_expression_hash(expression)
         ):
@@ -122,7 +127,7 @@ def _verify_lazy_factored_stage(
             ):
                 errors.append("factored Boolean normalization is malformed")
             else:
-                visit(node.get("proof"))
+                visit(node.get("proof"), normalized)
                 if normalized_hash not in certified:
                     errors.append(
                         "factored Boolean normalization child is not covered"
@@ -297,13 +302,13 @@ def _verify_lazy_factored_stage(
                 ):
                     errors.append("factored split child is malformed")
                     continue
-                visit(child.get("proof"))
+                visit(child.get("proof"), child_expression)
         else:
             errors.append("factored proof node rule is invalid")
         if len(errors) == before:
             certified.add(expression_hash)
 
-    visit(proof.get("tree"))
+    visit(proof.get("tree"), source)
     if _serialized_expression_hash(source) not in certified:
         errors.append("factored proof tree does not cover its root")
     return errors

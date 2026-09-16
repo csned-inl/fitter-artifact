@@ -1,15 +1,12 @@
-"""Map sampled controller values to exact physical interval trajectories."""
+"""Physical trajectories with sampled state retained as independent storage."""
 
 from __future__ import annotations
 
-from typing import Any, Iterable
-
 from clarity.certification.equations import Equation, EquationModel, Expr, Ite, Op, Var
 
-from .expressions import INTERVAL_TIME, _canonical_bytes, simplify
+from .expressions import INTERVAL_TIME, simplify
 from .proof_rules import (
     ProofDeferred,
-    expr_to_dict,
     expand_definitions,
     expression_symbols,
     substitute,
@@ -17,154 +14,7 @@ from .proof_rules import (
 
 
 def _equation(model: EquationModel, name: str) -> Equation | None:
-    return model.definitions.get(name) or model.transitions.get(name)
-
-
-def _path_to_continuous(
-    model: EquationModel,
-    start: str,
-    continuous: set[str],
-) -> tuple[str, list[dict[str, Any]]] | None:
-    """Find one deterministic equation path from a sampled value to physics."""
-
-    queue: list[tuple[str, list[dict[str, Any]]]] = [(start, [])]
-    visited: set[str] = set()
-    found: list[tuple[str, list[dict[str, Any]]]] = []
-    while queue:
-        name, path = queue.pop(0)
-        if name in visited:
-            continue
-        visited.add(name)
-        if name in continuous and name != start:
-            if _is_physical_target(name):
-                found.append((name, path))
-            continue
-        equation = _equation(model, name)
-        if equation is None:
-            continue
-        row = {
-            "target": equation.target,
-            "kind": equation.kind,
-            "source": equation.source,
-            "expression": expr_to_dict(equation.expr),
-        }
-        for reference in sorted(expression_symbols(equation.expr)):
-            if reference == name:
-                continue
-            queue.append((reference, path + [row]))
-    targets = sorted({target for target, _path in found})
-    if len(targets) != 1:
-        return None
-    target = targets[0]
-    candidates = [path for candidate, path in found if candidate == target]
-    candidates.sort(key=lambda value: (len(value), _canonical_bytes(value)))
-    return target, candidates[0]
-
-
-def _is_physical_target(name: str) -> bool:
-    return "time" not in name.lower()
-
-
-def physical_aliases(
-    model: EquationModel,
-    expressions: Iterable[Expr],
-    continuous: set[str],
-) -> tuple[dict[str, str], list[dict[str, Any]]]:
-    aliases: dict[str, str] = {}
-    records: list[dict[str, Any]] = []
-    symbols: set[str] = set()
-    for expression in expressions:
-        symbols |= expression_symbols(expression)
-    for symbol in sorted(symbols):
-        if symbol in continuous:
-            continue
-        path = _path_to_continuous(model, symbol, continuous)
-        if path is None or not _is_physical_target(path[0]):
-            continue
-        target, equations = path
-        aliases[symbol] = target
-        records.append({
-            "sampled_value": symbol,
-            "physical_value": target,
-            "equation_path": equations,
-            "rule": "ordered_sensor_path_to_current_physical_value_v1",
-        })
-    return aliases, records
-
-
-def _reaches_target(
-    model: EquationModel,
-    expr: Expr,
-    target: str,
-    *,
-    seen: set[str] | None = None,
-) -> bool:
-    seen = set(seen or set())
-    if isinstance(expr, Var):
-        if expr.name == target:
-            return True
-        if expr.name in seen:
-            return False
-        equation = _equation(model, expr.name)
-        return bool(
-            equation
-            and _reaches_target(
-                model,
-                equation.expr,
-                target,
-                seen=seen | {expr.name},
-            )
-        )
-    if isinstance(expr, Op):
-        return any(_reaches_target(model, arg, target, seen=set(seen)) for arg in expr.args)
-    if isinstance(expr, Ite):
-        return any(
-            _reaches_target(model, arg, target, seen=set(seen))
-            for arg in (expr.cond, expr.then_expr, expr.else_expr)
-        )
-    return False
-
-
-def _required_mapping_guards(
-    model: EquationModel,
-    sampled: str,
-    physical: str,
-) -> list[Expr]:
-    required: list[Expr] = []
-    visited: set[str] = set()
-    current = sampled
-    while current != physical and current not in visited:
-        visited.add(current)
-        equation = _equation(model, current)
-        if equation is None:
-            break
-        expression = equation.expr
-        if isinstance(expression, Ite):
-            then_reaches = _reaches_target(
-                model, expression.then_expr, physical, seen=set(visited)
-            )
-            else_reaches = _reaches_target(
-                model, expression.else_expr, physical, seen=set(visited)
-            )
-            if then_reaches and not else_reaches:
-                required.append(expand_definitions(model, expression.cond))
-                expression = expression.then_expr
-            elif else_reaches and not then_reaches:
-                required.append(
-                    Op("not", (expand_definitions(model, expression.cond),))
-                )
-                expression = expression.else_expr
-            else:
-                break
-        references = [
-            name
-            for name in sorted(expression_symbols(expression))
-            if _reaches_target(model, Var(name), physical, seen=set(visited))
-        ]
-        if len(references) != 1:
-            break
-        current = references[0]
-    return required
+    return model.definitions.get(name) or model.transitions.get(name) or model.sample_events.get(name)
 
 
 def _expand_post_update(
@@ -178,6 +28,8 @@ def _expand_post_update(
 
     seen = set(seen or set())
     if isinstance(expr, Var):
+        if expr.name in model.sampled_state:
+            return expr
         if expr.name in model.definitions:
             if expr.name in seen:
                 raise ProofDeferred("UNSUPPORTED_EXPRESSION", f"cyclic definition {expr.name}")
@@ -190,6 +42,11 @@ def _expand_post_update(
         if expr.name in model.state and expr.name not in continuous:
             equation = model.transitions.get(expr.name)
             if equation is not None and expr.name not in seen:
+                references = expand_definitions(model, equation.expr).refs()
+                # Only an explicit action-controlled output is a post-action
+                # substitution. A state-to-state assignment is a timed event.
+                if references & model.state or not references & model.actions:
+                    return expr
                 return _expand_post_update(
                     model,
                     equation.expr,

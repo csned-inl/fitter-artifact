@@ -1,14 +1,27 @@
 # CLARITY Controller Fitting Artifact
 
-This repository is a self contained implementation of the CLARITY controller
-fitting pipeline. It discovers the included SysML v2 models, extracts their
-controller contracts and physical equations, proves finite buffers sufficient
-for Markov control, certifies safety throughout each fixed discretization
-interval, and can train the resulting feedforward policies.
 
-The active artifact supports the three discrete action models under
-`src/clarity/models/`. Historical continuous action material is isolated under
-`backups/continuous_controller/` and is not loaded by the pipeline.
+**Current integration status:** incomplete; the bundled models are not certified.
+The source-preserving runtime and evidence gates reject previously hidden failures.
+The ordered decision composition and full preservation proof are unfinished.
+See [execution correspondence and blockers](docs/SYSML_EXECUTION_CORRESPONDENCE.md).
+
+This repository contains a self-contained implementation of the CLARITY
+controller fitting pipeline. It reads controller contracts and process
+equations from SysML v2, determines when recurrent state can be replaced by a
+finite buffer, checks the resulting sampled process and physical-safety
+certificates between controller updates, and trains a compact feedforward policy.
+
+The active artifact supports the thermostat, chemical mixing plant, and
+discrete cruise controller under `src/clarity/models/`. Historical continuous
+action material is isolated under `backups/continuous_controller/` and is not
+loaded by the active pipeline.
+
+**Current certification status:** the bundled models stop at Stage 3 because
+their now-explicit sensor message states need ordered transition composition.
+The physical/held-value and initialization/binding repairs, tests, and remaining
+failure are documented in [VALUE_STATE_CORRECTNESS.md](VALUE_STATE_CORRECTNESS.md).
+The current launcher does not complete safety certification or training.
 
 ## Setup
 
@@ -20,104 +33,117 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
-This installs the dependencies and provides the four `clarity-*` commands
-declared in `pyproject.toml`. The shell launcher can also run directly from a
-source checkout because it supplies `src/` on `PYTHONPATH`.
+This installs the pinned dependencies and the four `clarity-*` commands
+declared in `pyproject.toml`.
 
 ## Run
 
-Run the complete pipeline from this directory.
+Run all five stages on the bundled models.
 
 ```bash
 bash run_fitting_sequence.sh
 ```
 
-Run preprocessing only, through discretization certification.
+Run preprocessing through discretization certification without training.
 
 ```bash
 bash run_fitting_sequence.sh --preprocessing-only
 ```
 
-Select particular models or change the one fixed time step used by every
-stage.
+Particular SysML files and one fixed time step can be supplied directly.
 
 ```bash
 bash run_fitting_sequence.sh --dt 0.1 path/to/model.sysml
 ```
 
-Use `--models-root path/to/models` to discover models under another directory.
-Use `--smoke-training` for a short Stage 5 integration run.
+`--models-root` selects another model directory. `--smoke-training` performs a
+short Stage 5 integration run. The complete command interface is available
+through `python -m clarity.pipeline.runner --help`.
+
+## Supported SysML Profile
+
+The pipeline obtains its controller and process semantics from these
+annotations.
+
+| annotation | use |
+|---|---|
+| `#Neural` | identifies the policy action and its typed inputs and outputs |
+| `#NeuralRequirement` | defines the controller contract used for checking, architecture derivation, and shielding |
+| `#Completion` | identifies the policy completion input |
+| `#ScenarioInput` and `#ScenarioConstraint` | define scenario parameters, bounds, and initial relations |
+| `#Prohibition` and `#Obligation` | identify system properties checked by discretization certification |
+| `#ContinuousRate` | identifies sampled rate updates interpreted over the physical interval |
+
+Connections, flows, sensor equations, actuator equations, state updates, and
+initial values are read from the surrounding SysML model. Missing or ambiguous
+semantics stop certification rather than being supplied by model-specific
+configuration.
 
 ## Pipeline
 
-1. The action extraction stage evaluates the `#NeuralRequirement` directly.
-2. The memoryless stage checks whether the current neural inputs determine the
-   current controller constraint.
-3. The Markov process stage finds an observation and action buffer, checks the
-   corresponding theorem obligations, and writes the reduced MDP
+1. Direct action extraction evaluates the `#NeuralRequirement` when it
+   determines the current action without learned parameters.
+2. The memoryless check establishes whether the current neural inputs determine
+   the immediate controller constraint. This claim concerns the current
+   decision, not the complete physical process.
+3. Markov process certification searches up to two prior observations and four
+   prior executed actions for a sufficient finite buffer. It checks the
+   sampled transition obligations and writes a certificate and reduced MDP
    specification.
-4. The discretization stage proves every parsed `#Prohibition` and
-   `#Obligation` over the complete physical interval from zero through `dt`.
-5. The training stage fits a feedforward policy from the checked reduced
-   specification and retains the SysML derived shield.
+4. Discretization certification checks the Stage 3 evidence and proofs for every
+   parsed `#Prohibition` and `#Obligation` at the controller update and
+   throughout the following fixed `dt` interval. The extracted physical model
+   is used, including state not observed directly by
+   the controller. Known differences between this proof model and execution
+   are documented in the safety accounting document below.
+5. Feedforward training consumes the Stage 3 reduced MDP specification. The
+   checked architecture uses two hidden layers with a shared width equal to the
+   larger of the number of distinct SysML comparison boundaries and Boolean
+   controller outputs. Training retains the SysML-derived shield and begins
+   only after Stage 4 certifies the model.
 
-Stage 4 uses one model independent progression. It constructs the unsafe
-constraint lazily, attempts linear and convex proofs first, then exact symbolic
-and SMT checks, and finally performs reachable state exclusion when local
-feasibility is insufficient. A method that cannot prove its applicability or
-claim returns `DEFERRED`; it cannot silently certify the case.
-
-The discretization certificate checker is separate from generation. It
-reparses the hashed SysML source, reconstructs the property, physical
-trajectories, sensor mappings, endpoint equations, constants, initial
-conditions, and sampled transition relation, then checks the recorded exact
-proof evidence. Repeated proof subtrees are stored in a validated content
-addressed pool and the certificate is written as canonical compact JSON.
+Every time-dependent stage receives the same validated `dt`. The Stage 4
+method is described in `DISCRETIZATION_CERTIFICATION_DESIGN.md`.
 
 ## Outputs
 
-Each run replaces `outputs/latest/`.
+Each run rebuilds its selected output directory and writes one numbered
+subdirectory per stage. `fitting_sequence_summary.json` records the complete
+machine-readable result and `fitting_sequence_report.md` presents the same run
+in a compact table. The exact output inventory is in `ARTIFACT_MANIFEST.md`.
 
-| path | contents |
-|---|---|
-| `01_affine_rule/` | direct requirement evaluation |
-| `02_memoryless/` | current input controller check |
-| `03_markov_mdp/` | certificates, reduced specs, SMT queries, and proof records |
-| `04_discretization_safety/` | compact safety certificates and summaries |
-| `05_reduced_training/` | fitted policies, checkpoints, and evaluation summaries |
-| `fitting_sequence_summary.json` | machine readable run summary |
-| `fitting_sequence_report.md` | concise generated report |
+Stage 4 reloads each saved certificate and verifies proof completeness before
+training. Its `verification/*.verification.json` reports enumerate both required
+obligations for every safety property. Missing or invalid evidence prevents
+safety certification and Stage 5, even if the certificate claims `CERTIFIED`.
+
+## Safety accounting and transfer reserve
+
+Safety rates count every false system requirement returned from the actual
+SysML expressions, including Prohibitions and Obligations. Evaluation summaries
+record per-requirement check counts and violation-episode counts. The historical
+5 mL mixing transfer reserve has been restored in scenario generation.
+
+See [Transfer reserve and SysML safety accounting](SAFETY_RESERVE_AND_SPECIFICATION_ACCOUNTING.md)
+for the regression, corrected behavior, validation, and the remaining formal
+proof/runtime alignment work.
 
 ## Validation
 
-Run the focused regression groups against freshly generated certificates.
+Run the validation programs from the artifact root.
 
 ```bash
 python tests/certification/validate_reference_models.py
-python tests/training/validate_reduced_stack.py --skip-smoke
-python tests/training/validate_recurrent_gradients.py
+python tests/certification/validate_certification_battery.py
 python tests/discretization/validate_discretization.py \
   outputs/latest/04_discretization_safety/certificates/*.certificate.json
+python tests/training/validate_reduced_stack.py
+python tests/training/validate_recurrent_gradients.py
 ```
 
-The discretization battery separately covers arithmetic proof rules,
-certificate mutation rejection, source reconstruction, and loud deferral when
-within step semantics are missing.
-
-## Source Layout
-
-| path | role |
-|---|---|
-| `src/clarity/sysml/` | parser, simulator, discovery, and fixed `dt` handling |
-| `src/clarity/certification/` | Markov extraction plus separate certificate generation, schema, and checking |
-| `src/clarity/discretization/model/` | physical interval reduction |
-| `src/clarity/discretization/checkers/` | linear, convex, symbolic, and reachability methods |
-| `src/clarity/discretization/certificates/` | generation, compact storage, and independent checking |
-| `src/clarity/pipeline/stages/` | one implementation module for each pipeline stage |
-| `src/clarity/pipeline/` | the coordinator, shared process support, reports, and stage entry points |
-| `src/clarity/runtime/` | simulator environment, requirement oracle, and shield |
-| `src/clarity/training/` | recurrent baseline and reduced feedforward training |
-| `tests/` | validation programs, kept outside the installed package |
+The suites cover the bundled models, rejected model variants, certificate
+mutations, proof rules, source reconstruction, checker deferral, reduced
+training, and recurrent baseline gradients.
 
 ## Archive
 
@@ -125,6 +151,6 @@ within step semantics are missing.
 bash make_overleaf_archive.sh
 ```
 
-This writes `../fitter_artifact_overleaf.zip`. Git metadata, the virtual
-environment, generated outputs, historical backups, build products, and Python
-caches are excluded.
+This writes `../fitter_artifact_overleaf.zip`. Git metadata, generated outputs,
+historical backups, the virtual environment, build products, and Python caches
+are excluded.

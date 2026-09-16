@@ -50,7 +50,7 @@ from .solver import MAX_SOLVER_POLYNOMIAL_DEGREE, one_step_transition_closure
 from .strict_extract import extract_equation_model
 
 
-SAFETY_REQUIREMENT_KINDS = {"Prohibition", "Obligation", "Requirement", ""}
+SAFETY_REQUIREMENT_KINDS = {"Prohibition", "Obligation"}
 
 
 def _expr_to_dict(expr: Expr) -> dict[str, Any]:
@@ -522,7 +522,7 @@ def _rl_obligations(eq_model, relevance, model_path: str) -> dict[str, Any]:
     ]
     safety_requirements = [
         item for item in requirements
-        if item["source"].split(",", 1)[0] in SAFETY_REQUIREMENT_KINDS
+        if set(item["source"].split(",")) & SAFETY_REQUIREMENT_KINDS
     ]
     all_observations_covered = all(item["covered_by_q_and_action"] for item in observations)
     all_requirements_covered = all(item["covered_by_q_and_action"] for item in requirements)
@@ -578,7 +578,7 @@ def _rl_obligations(eq_model, relevance, model_path: str) -> dict[str, Any]:
         "truncation": {
             "status": "discharged_as_finite_horizon_augmented_state",
             "augmented_state_variable": "env.step_count",
-            "reset": "env.step_count := 0 on reset after warmup calls",
+            "reset": "env.step_count := 0 before source initialization; no reset actions",
             "transition": "env.step_count' := env.step_count + 1 after every env.step",
             "terminal_condition": "env.step_count >= env.max_steps",
             "reward_override": "if truncated and not already done: done=True, reward=0.0",
@@ -662,6 +662,12 @@ def reconstruction_trace(
     actions = set(model["ACTIONS"])
     nsupp = {k: set(v) for k, v in model["nsupp"].items()}
     copies = set(model["copies"])
+    missing_updates = sorted(state - set(nsupp))
+    if missing_updates:
+        return {"horizon": horizon, "b_obs": b_obs, "b_act": b_act, "facts": [],
+                "target_facts": [fact_key(v, 0) for v in sorted(target or state)],
+                "missing_target_facts": [fact_key(v, 0) for v in sorted(target or state)],
+                "missing_source_updates": missing_updates, "passes": False}
     obs = set(model["OBS"])
     sampled_memories = list(model.get("sampled_memories", []))
     if target is None:
@@ -687,7 +693,7 @@ def reconstruction_trace(
     while changed:
         changed = False
         for var in sorted(state):
-            supp = set(nsupp.get(var, set()))
+            supp = nsupp[var]
             for tau in taus:
                 next_tau = tau + 1
                 if next_tau in taus and fact_key(var, next_tau) not in facts:
@@ -902,6 +908,8 @@ def build_certificate_for_path(
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "value_semantics": eq_model.value_semantics,
+        "execution": eq_model.execution,
         "proof_profile": PROOF_PROFILE,
         "result": result,
         "claim": {

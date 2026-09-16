@@ -79,6 +79,7 @@ class DiscreteRuntime:
     obs_dim: int
     n_actions: int
     hidden_dim: int
+    observation_scale: float | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,7 @@ def _make_env(runtime: DiscreteRuntime) -> BufferedDiscreteEnv:
         rng_seed=0,
         n_obs=runtime.n_obs,
         n_act=runtime.n_act,
+        observation_scale=runtime.observation_scale,
     )
 
 
@@ -362,14 +364,22 @@ def _init_oracle_worker(runtime: DiscreteRuntime) -> None:
 def _worker_oracle_episode(job: OracleEpisodeJob):
     if _ORACLE_WORKER is None:
         raise RuntimeError("oracle worker was not initialized")
-    observations, actions = collect_oracle_episode(
-        _ORACLE_WORKER.iface,
-        _ORACLE_WORKER.env,
-        max_steps=_ORACLE_WORKER.max_steps,
-        reset_seed=job.env_seed,
-        include_terminal=job.include_terminal,
-    )
-    return job.index, observations, actions
+    return _oracle_attempt(_ORACLE_WORKER.iface, _ORACLE_WORKER.env,
+                           _ORACLE_WORKER.max_steps, job)
+
+
+def _oracle_attempt(iface, env, max_steps, job):
+    # Return the ledger even when selecting an action or advancing fails. A
+    # worker exception must not discard this attempt or another completed job.
+    try:
+        observations, actions = collect_oracle_episode(
+            iface, env, max_steps=max_steps, reset_seed=job.env_seed,
+            include_terminal=job.include_terminal)
+    except Exception as exc:
+        record = dict(env.last_oracle_report)
+        record.update(outcome='ERROR', exception=f'{type(exc).__name__}: {exc}')
+        return job.index, None, None, record
+    return job.index, observations, actions, dict(env.last_oracle_report)
 
 
 def generate_oracle_data_with_backend(
@@ -381,6 +391,7 @@ def generate_oracle_data_with_backend(
     min_class_count: int = 0,
     max_resets: int = 20000,
     seed_base: int = 0,
+    attempt_reports: list | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict[int, int], int]:
     """Generate an ordered dataset with deterministic per-episode seeds."""
     resolved = settings.resolved()
@@ -428,19 +439,18 @@ def generate_oracle_data_with_backend(
             if executor is None:
                 batch = []
                 for job in jobs:
-                    obs_ep, act_ep = collect_oracle_episode(
-                        iface,
-                        serial_env,
-                        max_steps=runtime.max_steps,
-                        reset_seed=job.env_seed,
-                        include_terminal=job.include_terminal,
-                    )
-                    batch.append((job.index, obs_ep, act_ep))
+                    batch.append(_oracle_attempt(iface, serial_env, runtime.max_steps, job))
             else:
                 batch = list(executor.map(_worker_oracle_episode, jobs))
 
             batch.sort(key=lambda item: item[0])
-            for _, obs_ep, act_ep in batch:
+            if attempt_reports is not None:
+                attempt_reports.extend(dict(record, index=index) for index, _, _, record in batch)
+            failed = [(index, record['exception']) for index, _, _, record in batch
+                      if 'exception' in record]
+            if failed:
+                raise RuntimeError(f'oracle collection failed; recorded attempts: {failed}')
+            for _, obs_ep, act_ep, _ in batch:
                 if not need_more() or resets >= max_resets:
                     break
                 if min_class_count <= 0:

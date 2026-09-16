@@ -21,46 +21,12 @@ from clarity.sysml.parser import (
 # ---------------------------------------------------------------------------
 
 def _evaluate(expr, values: dict, subject_var: str = ""):
-    if isinstance(expr, LiteralExpr):
-        return expr.value
-    if isinstance(expr, RefExpr):
-        path = list(expr.path)
-        if path and path[0] == subject_var:
-            path = path[1:]
-        key = ".".join(path)
-        if key in values:
-            return values[key]
-        if len(path) == 1 and path[0] in values:
-            return values[path[0]]
-        raise KeyError(f"Unknown ref: {'.'.join(expr.path)}")
-    if isinstance(expr, BinaryExpr):
-        if expr.op == "implies":
-            left = _evaluate(expr.left, values, subject_var)
-            return True if not left else _evaluate(expr.right, values, subject_var)
-        left = _evaluate(expr.left, values, subject_var)
-        right = _evaluate(expr.right, values, subject_var)
-        ops = {
-            "+": lambda a, b: a + b, "-": lambda a, b: a - b,
-            "*": lambda a, b: a * b, "/": lambda a, b: a / b,
-            "==": lambda a, b: a == b, ">=": lambda a, b: a >= b,
-            "<=": lambda a, b: a <= b, ">": lambda a, b: a > b,
-            "<": lambda a, b: a < b,
-            "and": lambda a, b: a and b, "or": lambda a, b: a or b,
-        }
-        if expr.op not in ops:
-            raise ValueError(f"unsupported expression operator: {expr.op}")
-        return ops[expr.op](left, right)
-    if isinstance(expr, UnaryExpr):
-        val = _evaluate(expr.operand, values, subject_var)
-        if expr.op == "not":
-            return not val
-        if expr.op == "-":
-            return -val
-    if isinstance(expr, TernaryExpr):
-        cond = _evaluate(expr.condition, values, subject_var)
-        return _evaluate(expr.true_expr if cond else expr.false_expr,
-                         values, subject_var)
-    raise TypeError(f"unsupported expression node: {type(expr).__name__}")
+    from clarity.sysml.simulator import ExpressionEvaluator
+    state = {name.replace('.', '::'): value for name, value in values.items()}
+    if subject_var:
+        state.update({subject_var + '::' + name.replace('.', '::'): value
+                      for name, value in values.items()})
+    return ExpressionEvaluator(state, strict=True).evaluate(expr)
 
 
 # ---------------------------------------------------------------------------
@@ -89,141 +55,6 @@ def flatten_conjunction(expr) -> list:
     return [expr]
 
 
-def _fixup_precedence(req_ast, out_set, const_set, subject_var):
-    """Fix operator precedence issues where == binds tighter than and/or.
-
-    Detects two patterns:
-
-    Pattern 1 — AND split:
-      The spec says: (comp1 AND comp2) == output
-      The parser produces: comp1 AND (comp2 == output)
-      After flattening: [comp1, (comp2 == output)]
-      Fix: merge into [(comp1 AND comp2) == output]
-
-    Pattern 2 — OR with biconditional child:
-      The spec says: (comp1 OR comp2) == output
-      The parser produces: comp1 OR (comp2 == output)
-      Fix: restructure to (comp1 OR comp2) == output
-
-    Detection: a "bare comparison" is a clause that references only
-    observations and constants — no output parameters. If it sits
-    next to a biconditional, they should be merged.
-    """
-    ignore = {subject_var} | const_set
-
-    def _refs_no_outputs(expr):
-        refs = collect_references(expr) - ignore
-        return refs and refs.isdisjoint(out_set)
-
-    def _is_biconditional_with_output(expr):
-        if isinstance(expr, BinaryExpr) and expr.op == '==':
-            left_refs = collect_references(expr.left) - ignore
-            right_refs = collect_references(expr.right) - ignore
-            if right_refs & out_set:
-                return True
-            if left_refs & out_set:
-                return True
-        return False
-
-    def _get_biconditional_parts(expr):
-        """Return (comparison_side, output_side) of a biconditional."""
-        left_refs = collect_references(expr.left) - ignore
-        right_refs = collect_references(expr.right) - ignore
-        if right_refs & out_set:
-            return expr.left, expr.right
-        if left_refs & out_set:
-            return expr.right, expr.left
-        return None, None
-
-    # Pattern 2: fix OR nodes with bare comp + biconditional
-    def _fixup_or(expr):
-        if not isinstance(expr, BinaryExpr) or expr.op != 'or':
-            return expr
-        # Recurse first
-        left = _fixup_or(expr.left)
-        right = _fixup_or(expr.right)
-
-        # Check: left is bare comparison, right is biconditional
-        if _refs_no_outputs(left) and _is_biconditional_with_output(right):
-            comp_side, out_side = _get_biconditional_parts(right)
-            if comp_side is not None:
-                return BinaryExpr('==',
-                                  BinaryExpr('or', left, comp_side),
-                                  out_side)
-
-        # Check: right is bare comparison, left is biconditional
-        if _refs_no_outputs(right) and _is_biconditional_with_output(left):
-            comp_side, out_side = _get_biconditional_parts(left)
-            if comp_side is not None:
-                return BinaryExpr('==',
-                                  BinaryExpr('or', comp_side, right),
-                                  out_side)
-
-        return BinaryExpr('or', left, right)
-
-    # Apply OR fixup to the whole AST first
-    def _walk_fix_or(expr):
-        if isinstance(expr, BinaryExpr):
-            left = _walk_fix_or(expr.left)
-            right = _walk_fix_or(expr.right)
-            fixed = BinaryExpr(expr.op, left, right)
-            if expr.op == 'or':
-                return _fixup_or(fixed)
-            return fixed
-        if isinstance(expr, UnaryExpr):
-            return UnaryExpr(expr.op, _walk_fix_or(expr.operand))
-        return expr
-
-    fixed_ast = _walk_fix_or(req_ast)
-
-    # Pattern 1: flatten AND, merge bare comparisons into adjacent biconditionals
-    clauses = flatten_conjunction(fixed_ast)
-    merged = []
-    i = 0
-    while i < len(clauses):
-        clause = clauses[i]
-
-        # Look ahead: bare comparison followed by biconditional
-        if (_refs_no_outputs(clause) and
-                i + 1 < len(clauses) and
-                _is_biconditional_with_output(clauses[i + 1])):
-            bicon = clauses[i + 1]
-            comp_side, out_side = _get_biconditional_parts(bicon)
-            if comp_side is not None:
-                merged.append(BinaryExpr('==',
-                                         BinaryExpr('and', clause, comp_side),
-                                         out_side))
-                i += 2
-                continue
-
-        # Look behind: biconditional followed by bare comparison
-        if (_is_biconditional_with_output(clause) and
-                i + 1 < len(clauses) and
-                _refs_no_outputs(clauses[i + 1])):
-            bare = clauses[i + 1]
-            comp_side, out_side = _get_biconditional_parts(clause)
-            if comp_side is not None:
-                merged.append(BinaryExpr('==',
-                                         BinaryExpr('and', comp_side, bare),
-                                         out_side))
-                i += 2
-                continue
-
-        merged.append(clause)
-        i += 1
-
-    # Rebuild conjunction
-    if not merged:
-        return fixed_ast
-    result = merged[0]
-    for j in range(1, len(merged)):
-        result = BinaryExpr('and', result, merged[j])
-    return result
-
-
-# ---------------------------------------------------------------------------
-# SpecShield — extraction only, used at construction time
-# ---------------------------------------------------------------------------
 
 class SpecShield:
     """Extracts shield data from SysML specification.
@@ -283,7 +114,8 @@ class SpecShield:
         neural_names = in_set | out_set
         self.unchanging = {}
         for p in parser.parameters:
-            if p.qualified_name.startswith(ctrl_prefix) and p.name not in neural_names:
+            if (p.qualified_name.startswith(ctrl_prefix) and p.name not in neural_names
+                    and 'ScenarioInput' not in p.metadata and p.value_kind == 'binding'):
                 self.unchanging[p.name] = p.value
 
         # Pick up controller constants not tagged #ScenarioInput
@@ -293,16 +125,13 @@ class SpecShield:
             req_refs.discard(self.subject_var)
             missing = req_refs - in_set - out_set - set(self.unchanging.keys())
             if missing:
-                from clarity.sysml.simulator import SimulationEngine, BindRef
-                eng = SimulationEngine(parser)
-                eng.initialize()
-                for key, val in eng.state.items():
-                    if isinstance(val, BindRef):
-                        continue
-                    if key.startswith(ctrl_prefix):
-                        name = key[len(ctrl_prefix):]
+                # Only source literal bindings are constants; an initialized
+                # mutable state is not an unchanging requirement parameter.
+                for attr in parser.derived_attributes:
+                    if attr.qualified_name.startswith(ctrl_prefix) and isinstance(attr.expression, LiteralExpr):
+                        name = attr.qualified_name[len(ctrl_prefix):]
                         if name in missing:
-                            self.unchanging[name] = val
+                            self.unchanging[name] = attr.expression.value
                             missing.discard(name)
                 if missing:
                     raise ValueError(
@@ -323,11 +152,8 @@ class SpecShield:
                     actuators[name] = bool(action_id & (1 << bit))
                 self.action_map[action_id] = actuators
 
-        # Fix operator precedence issues (== binding tighter than and/or)
-        if self.req_ast:
-            self.req_ast = _fixup_precedence(
-                self.req_ast, out_set,
-                set(self.unchanging.keys()), self.subject_var)
+        # The parser owns precedence. Never rewrite the source contract to
+        # infer the author's intended grouping from the output parameter names.
 
         # Dead actions from output-only clauses
         self.dead_actions = set()

@@ -28,9 +28,7 @@ from .source_reconstruction import (
     _expanded_references,
     _integer_variables,
     _inventory,
-    _physical_aliases,
     _policy_call_guards,
-    _required_mapping_guards,
     _scenario_constraints,
     _shield_expression,
     _timing_record,
@@ -43,6 +41,7 @@ def verify_analysis_source(
     mdp_certificate: dict[str, Any],
     dt_record: dict[str, Any],
     analysis: dict[str, Any],
+    *, inventory: dict[str, Any] | None = None,
 ) -> list[str]:
     """Verify that every recorded proof input is reconstructed from SysML."""
 
@@ -50,6 +49,8 @@ def verify_analysis_source(
     try:
         extractor = CertificationExtractor(model_path)
         model = extractor.extract()
+        errors.extend(diagnostic.pretty() for diagnostic in model.diagnostics
+                      if diagnostic.severity in {"warning", "error"})
         continuous, continuous_records = _continuous_targets(extractor, model)
         constants = _constant_values(extractor, model, dt_record)
         booleans = _boolean_variables(extractor, model, mdp_certificate)
@@ -70,6 +71,8 @@ def verify_analysis_source(
     except (KeyError, TypeError, ValueError) as exc:
         return [f"source reconstruction failed: {exc}"]
 
+    if analysis.get("value_semantics") != model.value_semantics:
+        errors.append("value semantics do not match the source")
     if analysis.get("timing") != _timing_record(mdp_certificate, dt_record):
         errors.append("analysis timing does not match source evidence")
     if analysis.get("continuous_rate_assignments") != continuous_records:
@@ -91,8 +94,14 @@ def verify_analysis_source(
     requirements = [
         equation
         for _target, equation in sorted(model.requirements.items())
-        if equation.source in {"Prohibition", "Obligation"}
+        if set(equation.source.split(",")) & {"Prohibition", "Obligation"}
     ]
+    if inventory is not None:
+        inventory.update({
+            equation.target.removeprefix("status."): {
+                "annotation": equation.source, "obligations": {},
+            } for equation in requirements
+        })
     properties = analysis.get("properties")
     if not isinstance(properties, list):
         return errors + ["analysis properties are malformed"]
@@ -134,25 +143,8 @@ def verify_analysis_source(
                 for name in expression_symbols(transition.expr)
             )
         }
-        aliases, alias_records = _physical_aliases(
-            model,
-            [original, shield, terminal],
-            changing,
-        )
-        guard_evidence: list[dict[str, Any]] = []
-        for mapping in alias_records:
-            required = _required_mapping_guards(
-                model,
-                mapping["sampled_value"],
-                mapping["physical_value"],
-            )
-            mapping["guard_evidence"] = [expr_to_dict(item) for item in required]
-            guard_evidence.extend({
-                "sampled_value": mapping["sampled_value"],
-                "guard": expr_to_dict(item),
-                "matched_controller_call_guard": item in guards,
-            } for item in required)
-        needed_physical = set(aliases.values()) | (
+        pairs = model.state_value_pairs
+        needed_physical = {pair["physical_value"] for pair in pairs} | (
             expression_symbols(original) & continuous
         )
         trajectories: dict[str, Expr] = {}
@@ -172,9 +164,7 @@ def verify_analysis_source(
                 "trajectory": expr_to_dict(trajectory),
                 "rule": "continuous_rate_assignment_with_held_effective_action_v1",
             })
-        physical_start = {
-            sampled: Var(target) for sampled, target in aliases.items()
-        }
+        physical_start = {}
         shield_at_start = simplify(substitute(shield, physical_start))
         terminal_at_start = simplify(substitute(
             _expand_post_update(
@@ -184,12 +174,7 @@ def verify_analysis_source(
             ),
             constants,
         ))
-        interval_values = {
-            sampled: trajectories[target]
-            for sampled, target in aliases.items()
-            if target in trajectories
-        }
-        interval_values.update(trajectories)
+        interval_values = dict(trajectories)
         interval_property = simplify(substitute(
             simplify(substitute(
                 _expand_post_update(
@@ -201,9 +186,7 @@ def verify_analysis_source(
             )),
             constants,
         ))
-        start_values = {
-            sampled: Var(target) for sampled, target in aliases.items()
-        }
+        start_values = {}
         start_values.update({target: Var(target) for target in continuous})
         start_property = simplify(substitute(
             simplify(substitute(
@@ -224,10 +207,12 @@ def verify_analysis_source(
             interval_property
         ):
             mismatch("physical interval property")
-        if reduction.get("sensor_to_physical_mappings") != alias_records:
-            mismatch("sensor mapping")
-        if reduction.get("sensor_mapping_guard_evidence") != guard_evidence:
-            mismatch("sensor guard evidence")
+        if reduction.get("state_value_pairs") != pairs:
+            mismatch("separate physical/sampled state values")
+        if reduction.get("sampled_values_held") != sorted(model.sampled_state):
+            mismatch("held sampled values")
+        if reduction.get("sensor_to_physical_mappings"):
+            mismatch("forbidden sample-to-current substitution")
         if reduction.get("trajectories") != trajectory_rows:
             mismatch("trajectory reconstruction")
 
@@ -257,6 +242,11 @@ def verify_analysis_source(
             mismatch("constraint reduction")
             sampled_expected = sampled_raw
             interval_expected = interval_raw
+        if inventory is not None:
+            inventory[property_id]["obligations"] = {
+                "sampled_point": expr_to_dict(sampled_expected),
+                "physical_interval": expr_to_dict(interval_expected),
+            }
         if reduction.get("sampled_point_counterexample") != expr_to_dict(
             sampled_expected
         ):
@@ -323,7 +313,7 @@ def verify_analysis_source(
             )
         except ValueError:
             dependency_seeds = set()
-        for mapping in alias_records:
+        for mapping in pairs:
             dependency_seeds.update({
                 mapping["sampled_value"],
                 mapping["physical_value"],

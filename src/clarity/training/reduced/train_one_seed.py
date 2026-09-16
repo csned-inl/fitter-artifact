@@ -127,11 +127,14 @@ def train_one_seed(model_path: str, seed: int, out_dir: str | Path,
                    balance_oracle_classes: bool = False,
                    reduced_mdp_spec_path: str | Path | None = None,
                    reduced_mdp_spec_out: str | Path | None = None,
+                   safety_certificate_path: str | Path | None = None,
                    collection_backend: str = "serial",
                    collection_workers: int = 1,
                    collection_start_method: str = "spawn",
                    config: dict | None = None) -> dict:
     dt = validate_dt(dt)
+    from clarity.training.authorization import require_training_evidence
+    require_training_evidence(model_path, dt, reduced_mdp_spec_path, safety_certificate_path)
     cfg = dict(DEFAULT_CONFIG)
     if config:
         cfg.update(config)
@@ -232,6 +235,7 @@ def train_one_seed(model_path: str, seed: int, out_dir: str | Path,
         rng_seed=seed,
         n_obs=policy_n_obs,
         n_act=policy_n_act,
+        observation_scale=reduced_spec["policy_input"]["normalization_scale"],
     )
     obs_dim = probe.obs_dim
     n_actions = probe.n_actions
@@ -292,6 +296,7 @@ def train_one_seed(model_path: str, seed: int, out_dir: str | Path,
         phase=2,
         n_obs=policy_n_obs,
         n_act=policy_n_act,
+        observation_scale=reduced_spec["policy_input"]["normalization_scale"],
         obs_dim=obs_dim,
         n_actions=n_actions,
         hidden_dim=hidden_dim,
@@ -303,14 +308,20 @@ def train_one_seed(model_path: str, seed: int, out_dir: str | Path,
         f"start_method={collection_settings.start_method}"
     )
 
-    obs_data, act_data, class_counts, resets = generate_oracle_data_with_backend(
-        replace(runtime, phase=1),
-        collection_settings,
-        iface,
-        cfg["oracle_samples"],
-        min_class_count=ensure_class_coverage,
-        seed_base=seed,
-    )
+    oracle_attempt_reports = []
+    try:
+        obs_data, act_data, class_counts, resets = generate_oracle_data_with_backend(
+            replace(runtime, phase=1),
+            collection_settings,
+            iface,
+            cfg["oracle_samples"],
+            min_class_count=ensure_class_coverage,
+            seed_base=seed,
+            attempt_reports=oracle_attempt_reports,
+        )
+    finally:
+        (out_path / 'oracle_requirement_accounting.json').write_text(
+            json.dumps(oracle_attempt_reports, indent=2) + '\n')
     print(
         "oracle data: "
         f"{len(act_data)} samples, class_counts={class_counts}, resets={resets}"
@@ -413,6 +424,7 @@ def train_one_seed(model_path: str, seed: int, out_dir: str | Path,
                 checkpoint = {
                     "episode": ep_i,
                     "safety_violation_rate": summary.safety_violation_rate,
+                    "evaluation_error_rate": summary.evaluation_error_rate,
                     "success_rate": summary.success_rate,
                     "override_rate": summary.pooled_override_rate,
                     "mean_episode_steps": summary.mean_episode_steps,
@@ -430,7 +442,7 @@ def train_one_seed(model_path: str, seed: int, out_dir: str | Path,
                     f"steps={summary.mean_episode_steps:.1f}"
                 )
 
-        safe = [c for c in checkpoints if c["safety_violation_rate"] == 0.0]
+        safe = [c for c in checkpoints if c["safety_violation_rate"] == 0.0 and c["evaluation_error_rate"] == 0.0]
         if not safe:
             raise RuntimeError("no safe checkpoint; refusing to select a model")
         best = sorted(
@@ -589,6 +601,7 @@ def main() -> int:
         default="spawn",
         help="multiprocessing start method; spawn is safe with device runtimes",
     )
+    ap.add_argument("--safety-certificate", required=True)
     args = ap.parse_args()
     train_one_seed(
         args.model,
@@ -604,6 +617,7 @@ def main() -> int:
         balance_oracle_classes=args.balance_oracle_classes,
         reduced_mdp_spec_path=args.reduced_mdp_spec,
         reduced_mdp_spec_out=args.reduced_mdp_spec_out,
+        safety_certificate_path=args.safety_certificate,
         collection_backend=args.collection_backend,
         collection_workers=args.collection_workers,
         collection_start_method=args.collection_start_method,

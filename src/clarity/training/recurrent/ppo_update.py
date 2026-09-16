@@ -26,6 +26,8 @@ def _build_padded_batch(episodes: list, obs_dim: int, gamma: float,
     mask = np.zeros((B, T), dtype=np.float32)
     for i, ep in enumerate(episodes):
         Ti = len(ep.obs)
+        if Ti == 0:
+            continue
         obs[i, :Ti] = np.array(ep.obs, dtype=np.float32)
         actions[i, :Ti] = np.array(ep.actions, dtype=np.int64)
         old_logp[i, :Ti] = np.array(ep.log_probs, dtype=np.float32)
@@ -50,6 +52,11 @@ def ppo_update(policy, optimizer, episodes: list, obs_dim: int,
                bptt_chunk_size: int = 0,
                max_grad_norm: float = 0.5, rng=None) -> dict:
     """Run n_epochs of PPO updates over the collected episodes."""
+    if any(getattr(ep, 'evaluation_errors', []) for ep in episodes):
+        raise ValueError('PPO cannot train on unresolved source evaluation errors')
+    if not any(len(ep.actions) for ep in episodes):
+        return {'policy_loss': 0.0, 'value_loss': 0.0, 'entropy': 0.0,
+                'approx_kl': 0.0, 'updates': 0, 'zero_action_episodes': len(episodes)}
     obs, actions, old_logp, advantages, returns, mask = _build_padded_batch(
         episodes, obs_dim, gamma, lam)
     B = obs.shape[0]
@@ -74,6 +81,8 @@ def ppo_update(policy, optimizer, episodes: list, obs_dim: int,
             mb_adv = advantages[idx]
             mb_ret = returns[idx]
             mb_mask = mask[idx]
+            if not mb_mask.any():
+                continue  # No action data: even a zero-gradient Adam step is incorrect.
             h0 = policy.initial_hidden(len(idx))
 
             logits, values, cache = policy.forward_sequence(

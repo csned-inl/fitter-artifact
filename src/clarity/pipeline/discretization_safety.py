@@ -13,7 +13,8 @@ from typing import Any
 
 from clarity.discretization.certificates import (
     build_certificate,
-    check_certificate,
+    verify_certificate,
+    load_certificate,
     write_certificate,
 )
 from clarity.models import models_root
@@ -81,27 +82,31 @@ def main() -> int:
             smt_timeout_ms=args.smt_timeout_ms,
         )
         write_certificate(certificate, certificate_path)
-        errors = check_certificate(certificate)
+        verification = verify_certificate(load_certificate(certificate_path))
+        verification_path = artifact_dir / "verification" / f"{model.key}.verification.json"
+        write_json(verification_path, verification)
+        errors = verification["errors"]
         elapsed = time.perf_counter() - started
-        properties = certificate.get("analysis", {}).get("properties", [])
         row = {
             "model": model.key,
             "model_name": model.name,
             "dt": dt,
-            "result": certificate.get("result", "NOT_CERTIFIED"),
+            "result": verification["result"],
             "checker": "passed" if not errors else "failed",
-            "properties_checked": len(properties),
-            "properties_certified": sum(
-                item.get("result") == "CERTIFIED" for item in properties
-            ),
+            "properties_checked": verification["properties_checked"],
+            "properties_certified": verification["properties_certified"],
+            "obligations_checked": verification["obligations_checked"],
+            "obligations_certified": verification["obligations_certified"],
+            "safety_certified": verification["safety_certified"],
+            "verification_path": str(verification_path.relative_to(artifact_dir)),
             "elapsed_seconds": elapsed,
             "certificate_path": str(certificate_path.relative_to(artifact_dir)),
             "errors": errors,
         }
         rows.append(row)
-        if errors or certificate.get("result") != "CERTIFIED":
+        if not verification["safety_certified"]:
             failures += 1
-        if not errors and certificate.get("result") == "VIOLATION":
+        if verification["source_verified"] and verification["result"] == "VIOLATION":
             violations += 1
         print(
             f"{model.key}: result={row['result']} checker={row['checker']} "

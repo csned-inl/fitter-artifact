@@ -21,7 +21,10 @@ class Episode:
     total_us: list = field(default_factory=list)
     outcome: str = ""
     violations: list = field(default_factory=list)
+    requirement_checks: dict[str, int] = field(default_factory=dict)
     safety_viol: bool = False
+    evaluation_errors: list = field(default_factory=list)
+    event_cursor: tuple | None = None
 
     def compact(self) -> "Episode":
         """Pack step data into arrays before cross-process transfer."""
@@ -38,7 +41,10 @@ class Episode:
             total_us=np.asarray(self.total_us, dtype=np.float64),
             outcome=self.outcome,
             violations=list(self.violations),
+            requirement_checks=dict(self.requirement_checks),
             safety_viol=bool(self.safety_viol),
+            evaluation_errors=list(self.evaluation_errors),
+            event_cursor=self.event_cursor,
         )
 
 
@@ -62,6 +68,9 @@ class RolloutSummary:
     total_us_mean: float
     total_us_p95: float
     total_us_p99: float
+    evaluation_error_rate: float = 0.0
+    requirement_checks: dict[str, int] = field(default_factory=dict)
+    requirement_violation_episodes: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -73,32 +82,67 @@ class RolloutMeasurements:
     n_viol: int
     n_trunc: int
     n_safety: int
+    n_errors: int
     total_steps: int
     total_overrides: int
     total_reward: float
     policy_us: np.ndarray
     shield_us: np.ndarray
     total_us: np.ndarray
+    requirement_checks: dict[str, int] = field(default_factory=dict)
+    requirement_violation_episodes: dict[str, int] = field(default_factory=dict)
+
+
+def _record_events(ep, events, failed):
+    for event in events:
+        if ep.event_cursor is None:
+            if event.sequence != 0:
+                raise ValueError('requirement ledger starts after initialization')
+        elif event.episode_id != ep.event_cursor[0] or event.sequence != ep.event_cursor[1] + 1:
+            raise ValueError('requirement ledger gap, duplicate, or wrong episode')
+        ep.event_cursor = (event.episode_id, event.sequence)
+        for name, entry in event.statuses.items():
+            ep.requirement_checks[name] = ep.requirement_checks.get(name, 0) + 1
+            if entry['status'] is False:
+                failed.add(name)
+            if entry['error'] is not None:
+                ep.evaluation_errors.append(f"{name} at event {event.sequence}: {entry['error']}")
 
 
 def collect_episode(env, composite, rng=None, greedy: bool = False,
                     reset_seed: int | None = None) -> Episode:
-    obs = env.reset(seed=reset_seed)
-    hidden = composite.policy.initial_hidden(1)
+    initial = env.reset_with_result(seed=reset_seed)
+    obs = initial.observation
     ep = Episode()
+    failed_properties: set[str] = set()
+    _record_events(ep, initial.events, failed_properties)
+    if initial.error:
+        ep.evaluation_errors.append(initial.error)
+    if initial.outcome != 'decision':
+        ep.outcome = ('ERROR' if initial.outcome == 'error' else
+                      'VIOLATION' if initial.outcome == 'violation' else 'SUCCESS')
+        ep.violations = sorted(failed_properties)
+        ep.safety_viol = bool(ep.violations)
+        return ep
+    hidden = composite.policy.initial_hidden(1)
     done = False
     reward = 0.0
     info = {}
-    requirement_violated = False
     while not done:
         obs_norm = obs[None, :].astype(np.float32, copy=False)
         raw_obs = env.model_inputs
-        (final_action, log_prob, value, hidden, overridden, _,
-         timing_us) = composite.act(obs_norm, hidden, raw_obs,
-                                    greedy=greedy, rng=rng)
-        if not composite.requirement_holds(final_action, raw_obs):
-            requirement_violated = True
-        next_obs, reward, done, info = env.step(final_action)
+        try:
+            (final_action, log_prob, value, hidden, overridden, _,
+             timing_us) = composite.act(obs_norm, hidden, raw_obs,
+                                        greedy=greedy, rng=rng)
+            next_obs, reward, done, info = env.step(final_action)
+        except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+            ep.evaluation_errors.append(f'{type(exc).__name__}: {exc}')
+            info = {'outcome': 'ERROR'}
+            break
+        _record_events(ep, info['requirement_events'], failed_properties)
+        if info.get('error'):
+            ep.evaluation_errors.append(info['error'])
         ep.obs.append(obs)
         ep.actions.append(final_action)
         ep.rewards.append(reward)
@@ -111,15 +155,9 @@ def collect_episode(env, composite, rng=None, greedy: bool = False,
         ep.total_us.append(timing_us["total_us"])
         obs = next_obs
 
-    ep.outcome = (
-        "SUCCESS" if reward > 0 else ("VIOLATION" if reward < 0 else "TRUNCATED")
-    )
-    statuses = info.get("statuses", {})
-    ep.violations = [
-        name for name, entry in statuses.items()
-        if not entry.get("status", True)
-    ]
-    ep.safety_viol = requirement_violated
+    ep.outcome = info["outcome"]
+    ep.violations = sorted(failed_properties)
+    ep.safety_viol = bool(ep.violations)
     return ep
 
 
@@ -139,6 +177,7 @@ def measure_episodes(episodes) -> RolloutMeasurements:
     n_viol = 0
     n_trunc = 0
     n_safety = 0
+    n_errors = 0
     total_steps = 0
     total_overrides = 0
     total_reward = 0.0
@@ -146,15 +185,23 @@ def measure_episodes(episodes) -> RolloutMeasurements:
     shield_parts = []
     total_parts = []
     n_episodes = 0
+    checks = {}
+    failures = {}
     for ep in episodes:
         n_episodes += 1
-        if ep.outcome == "SUCCESS":
+        if ep.evaluation_errors or ep.outcome == "ERROR":
+            n_errors += 1
+        elif ep.outcome == "SUCCESS":
             n_succ += 1
         elif ep.outcome == "VIOLATION":
             n_viol += 1
         else:
             n_trunc += 1
-        n_safety += int(ep.safety_viol)
+        n_safety += int(bool(ep.violations))
+        for name, count in ep.requirement_checks.items():
+            checks[name] = checks.get(name, 0) + count
+        for name in set(ep.violations):
+            failures[name] = failures.get(name, 0) + 1
         total_steps += len(ep.actions)
         total_overrides += int(np.asarray(ep.overrides, dtype=np.int64).sum())
         total_reward += float(np.asarray(ep.rewards, dtype=np.float64).sum())
@@ -174,12 +221,15 @@ def measure_episodes(episodes) -> RolloutMeasurements:
         n_viol=n_viol,
         n_trunc=n_trunc,
         n_safety=n_safety,
+        n_errors=n_errors,
         total_steps=total_steps,
         total_overrides=total_overrides,
         total_reward=total_reward,
         policy_us=joined(policy_parts),
         shield_us=joined(shield_parts),
         total_us=joined(total_parts),
+        requirement_checks=checks,
+        requirement_violation_episodes=failures,
     )
 
 
@@ -195,18 +245,28 @@ def merge_measurements(parts) -> RolloutMeasurements:
             return np.empty(0, dtype=np.float64)
         return np.concatenate(arrays)
 
+    def merged_counts(field):
+        result = {}
+        for part in parts:
+            for name, count in getattr(part, field).items():
+                result[name] = result.get(name, 0) + count
+        return result
+
     return RolloutMeasurements(
         n_episodes=sum(part.n_episodes for part in parts),
         n_succ=sum(part.n_succ for part in parts),
         n_viol=sum(part.n_viol for part in parts),
         n_trunc=sum(part.n_trunc for part in parts),
         n_safety=sum(part.n_safety for part in parts),
+        n_errors=sum(part.n_errors for part in parts),
         total_steps=sum(part.total_steps for part in parts),
         total_overrides=sum(part.total_overrides for part in parts),
         total_reward=sum(part.total_reward for part in parts),
         policy_us=joined("policy_us"),
         shield_us=joined("shield_us"),
         total_us=joined("total_us"),
+        requirement_checks=merged_counts("requirement_checks"),
+        requirement_violation_episodes=merged_counts("requirement_violation_episodes"),
     )
 
 
@@ -224,6 +284,7 @@ def summarize_measurements(data: RolloutMeasurements) -> RolloutSummary:
         mean_episode_steps=data.total_steps / max(data.n_episodes, 1),
         mean_reward=data.total_reward / max(data.n_episodes, 1),
         safety_violation_rate=data.n_safety / max(data.n_episodes, 1),
+        evaluation_error_rate=data.n_errors / max(data.n_episodes, 1),
         policy_us_mean=p_mean,
         policy_us_p95=p_p95,
         policy_us_p99=p_p99,
@@ -233,6 +294,8 @@ def summarize_measurements(data: RolloutMeasurements) -> RolloutSummary:
         total_us_mean=t_mean,
         total_us_p95=t_p95,
         total_us_p99=t_p99,
+        requirement_checks=dict(data.requirement_checks),
+        requirement_violation_episodes=dict(data.requirement_violation_episodes),
     )
 
 

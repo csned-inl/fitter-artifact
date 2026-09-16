@@ -157,6 +157,13 @@ class EquationModel:
     terminals: dict[str, Equation] = field(default_factory=dict)
     transitions: dict[str, Equation] = field(default_factory=dict)
     requirements: dict[str, Equation] = field(default_factory=dict)
+    # Sampling/delivery events are not same-time equalities or cycle updates.
+    sample_events: dict[str, Equation] = field(default_factory=dict)
+    sampled_state: set[str] = field(default_factory=set)
+    state_value_pairs: list[dict[str, Any]] = field(default_factory=list)
+    value_semantics: dict[str, Any] = field(default_factory=dict)
+    execution: dict[str, Any] = field(default_factory=dict)
+    declared_sorts: dict[str, str] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
 
     def add_diagnostic(self, severity: str, code: str, message: str, subject: str = "") -> None:
@@ -168,3 +175,4 @@ class EquationModel:
         yield from self.terminals.values()
         yield from self.transitions.values()
         yield from self.requirements.values()
+        yield from self.sample_events.values()

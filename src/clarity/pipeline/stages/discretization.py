@@ -66,7 +66,7 @@ def run_discretization_stage(
                 f"seconds={float(row['elapsed_seconds']):.6f}"
                 for row in rows
             ],
-            "- every certificate is replayed by the independent checker",
+            "- every saved certificate is reloaded; all safety obligations require verified evidence",
         ],
         raw_text,
     )
@@ -77,12 +77,13 @@ def run_discretization_stage(
         raise RuntimeError(
             f"discretization-safety dt does not match run dt: {generated_dt} != {dt}"
         )
-    if len(rows) != len(models):
+    if len(rows) != len(models) or {row.get("model") for row in rows} != {model.key for model in models}:
         raise RuntimeError(
             "discretization-safety generation did not produce one result for every model"
         )
     if any(
         row.get("result") != "CERTIFIED" or row.get("checker") != "passed"
+        or row.get("safety_certified") is not True
         for row in rows
     ):
         raise RuntimeError(
@@ -97,6 +98,10 @@ def run_discretization_stage(
         "checker",
         "properties_checked",
         "properties_certified",
+        "obligations_checked",
+        "obligations_certified",
+        "safety_certified",
+        "verification_path",
         "elapsed_seconds",
         "certificate_path",
     ]

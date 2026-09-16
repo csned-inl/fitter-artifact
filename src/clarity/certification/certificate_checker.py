@@ -68,9 +68,51 @@ def _check_schema_and_equations(
 
     model_info = certificate.get("model", {})
     model_path = model_info.get("path")
-    if check_hash and model_path and Path(model_path).exists():
+    execution = certificate.get("execution")
+    if not isinstance(execution, dict) or execution.get("version") != 1:
+        errors.append("missing source-bound ordered execution")
+    semantics = certificate.get("value_semantics")
+    if not isinstance(semantics, dict) or semantics.get("version") != 1:
+        errors.append("missing explicit physical/sampled value semantics")
+    elif semantics.get("implicit_sample_to_physical_equality") is not False:
+        errors.append("sampled values cannot be implicitly identified with physical values")
+    else:
+        state_variables = set(certificate.get("sets", {}).get("state", []))
+        for pair in semantics.get("state_value_pairs", []):
+            physical, sampled = pair.get("physical_value"), pair.get("sampled_value")
+            if physical == sampled or not {physical, sampled} <= state_variables:
+                errors.append("physical/sampled pair does not name two distinct state variables")
+    if check_hash and (not model_path or not Path(model_path).is_file()):
+        errors.append("source model is unavailable for semantic verification")
+    if check_hash and model_path and Path(model_path).is_file():
         if model_hash(model_path) != model_info.get("sha256"):
             errors.append("model sha256 does not match certificate")
+        from .strict_extract import extract_equation_model
+        try:
+            source_model = extract_equation_model(str(model_path))
+            from .ordered_execution import validate_execution_description
+            errors.extend(validate_execution_description(execution, model_path))
+            from .certificate_generation import _equation_to_dict
+            for section in ('definitions', 'observations', 'terminals', 'transitions', 'requirements'):
+                expected = [_equation_to_dict(e, source_model.constants) for e in
+                            sorted(getattr(source_model, section).values(), key=lambda e: e.target)]
+                if certificate.get('equations', {}).get(section) != expected:
+                    errors.append(f'{section} equations differ from source reconstruction')
+            from .relevance import compute_transition_closed_relevance
+            from .solver import one_step_transition_closure
+            q = compute_transition_closed_relevance(source_model).q
+            if set(certificate.get('sets', {}).get('q', [])) != set(q):
+                errors.append('certified state differs from source relevance')
+            checked = one_step_transition_closure(source_model, set(q), timeout_ms=1000)
+            if checked.get('status') != 'discharged':
+                errors.append('source-reconstructed solver obligation is not discharged')
+            if semantics != source_model.value_semantics:
+                errors.append("physical/sampled value semantics do not match source")
+            for diagnostic in source_model.diagnostics:
+                if diagnostic.severity in {"warning", "error"}:
+                    errors.append(diagnostic.pretty())
+        except (ValueError, KeyError, TypeError) as exc:
+            errors.append(f"source value reconstruction failed: {exc}")
 
     diagnostics = certificate.get("diagnostics", {})
     if diagnostics.get("blocking"):

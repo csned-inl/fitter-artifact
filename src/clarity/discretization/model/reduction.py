@@ -12,9 +12,7 @@ from .expressions import INTERVAL_TIME, _and, expression_hash, simplify
 from .physical_reduction import (
     _equation,
     _expand_post_update,
-    _required_mapping_guards,
     _trajectory,
-    physical_aliases,
 )
 from .proof_rules import (
     ProofDeferred,
@@ -86,53 +84,13 @@ def build_reduction(
         if terminal_equation is not None
         else Const(False)
     )
-    all_changing = {
-        target
-        for target, transition in model.transitions.items()
-        if any(
-            name == "dt" or name.endswith("_dt")
-            for name in expression_symbols(transition.expr)
-        )
-    }
-    aliases, alias_records = physical_aliases(
-        model,
-        [original, shield_expression, terminal],
-        all_changing,
-    )
-    required_changing = set(aliases.values()) | (
-        expression_symbols(original) & all_changing
-    )
-    missing_annotations = sorted(required_changing - continuous)
-    if missing_annotations:
-        raise ProofDeferred(
-            "MISSING_WITHIN_STEP_MEANING",
-            "missing #ContinuousRate on " + ", ".join(missing_annotations),
-        )
-    guard_evidence: list[dict[str, Any]] = []
-    for mapping in alias_records:
-        required_guards = _required_mapping_guards(
-            model,
-            mapping["sampled_value"],
-            mapping["physical_value"],
-        )
-        for required_guard in required_guards:
-            if required_guard not in guards:
-                raise ProofDeferred(
-                    "BLOCKED_INPUT",
-                    "sensor mapping guard is not a controller call guard for "
-                    + mapping["sampled_value"],
-                )
-        mapping["guard_evidence"] = [
-            expr_to_dict(item) for item in required_guards
-        ]
-        guard_evidence.extend({
-            "sampled_value": mapping["sampled_value"],
-            "guard": expr_to_dict(item),
-            "matched_controller_call_guard": True,
-        } for item in required_guards)
-    needed_physical = set(aliases.values()) | (
+    pairs = model.state_value_pairs
+    needed_physical = {pair["physical_value"] for pair in pairs} | (
         expression_symbols(original) & continuous
     )
+    missing_annotations = needed_physical - continuous
+    if missing_annotations:
+        raise ProofDeferred("MISSING_WITHIN_STEP_MEANING", ", ".join(sorted(missing_annotations)))
     trajectories: dict[str, Expr] = {}
     trajectory_rows: list[dict[str, Any]] = []
     for target in sorted(needed_physical):
@@ -148,7 +106,7 @@ def build_reduction(
             "rule": "continuous_rate_assignment_with_held_effective_action_v1",
         })
 
-    physical_start = {sampled: Var(target) for sampled, target in aliases.items()}
+    physical_start: dict[str, Expr] = {}  # No equality between sampled and current values.
     shield_at_start = simplify(substitute(shield_expression, physical_start))
     terminal_at_start = _expand_post_update(
         model,
@@ -160,12 +118,7 @@ def build_reduction(
         constant_values,
     ))
 
-    interval_values: dict[str, Expr] = {
-        sampled: trajectories[target]
-        for sampled, target in aliases.items()
-        if target in trajectories
-    }
-    interval_values.update(trajectories)
+    interval_values: dict[str, Expr] = dict(trajectories)
     interval_property = _expand_post_update(
         model,
         substitute(original, physical_start),
@@ -174,9 +127,7 @@ def build_reduction(
     interval_property = simplify(substitute(interval_property, interval_values))
     interval_property = simplify(substitute(interval_property, constant_values))
 
-    start_values: dict[str, Expr] = {
-        sampled: Var(target) for sampled, target in aliases.items()
-    }
+    start_values: dict[str, Expr] = {}
     start_values.update({target: Var(target) for target in continuous})
     start_property = _expand_post_update(
         model,
@@ -241,7 +192,7 @@ def build_reduction(
     }
 
     dependency_seeds = expression_symbols(counterexample)
-    for record in alias_records:
+    for record in pairs:
         dependency_seeds.add(record["sampled_value"])
         dependency_seeds.add(record["physical_value"])
     included_targets = _dependency_closure(model, dependency_seeds)
@@ -309,7 +260,7 @@ def build_reduction(
         ],
     ]
     record = {
-        "kind": "full_sysml_interval_reduction_v3",
+        "kind": "full_sysml_interval_reduction_v4",
         "property_id": equation.target.removeprefix("status."),
         "annotation": equation.source,
         "original_property": expr_to_dict(original),
@@ -337,8 +288,8 @@ def build_reduction(
             "The controller output selected at the current reading is held through "
             "the following physical interval and is substituted through actuator equations."
         ),
-        "sensor_to_physical_mappings": alias_records,
-        "sensor_mapping_guard_evidence": guard_evidence,
+        "state_value_pairs": pairs,
+        "sampled_values_held": sorted(model.sampled_state),
         "trajectories": trajectory_rows,
         "sampled_point_premise": {
             "controller_contract": expr_to_dict(shield_at_start),
@@ -396,8 +347,8 @@ def build_reduction(
             "complete_for_case_symbols": True,
         },
         "human_description": (
-            "The SysML sensor equations map the controller reading to the listed "
-            "physical state. The controller contract selects the held action. The "
+            "Sampled readings and current physical values occupy distinct storage. "
+            "Held samples remain unchanged within each sample-free interval. The "
             "annotated physical equations then define every listed trajectory for "
             "all times from zero through dt. The cases are the exhaustive unsafe "
             "alternatives of that complete interval statement."

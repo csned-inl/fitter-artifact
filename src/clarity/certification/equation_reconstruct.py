@@ -237,13 +237,10 @@ def equation_reconstruction_trace(
     state = set(model.state)
     actions = set(model.actions)
     target = set(target or state)
-    memory_rules, memory_assumptions = ([], [])
-    if enable_sampled_memory:
-        memory_rules, memory_assumptions = sampled_memory_rules(model, dt)
-    schedule_state = deterministic_state_variables(model) | {
-        rule["schedule_state"] for rule in memory_rules
-        if rule.get("schedule_state") in state
-    }
+    memory_rules, memory_assumptions = [], []
+    schedule_state = set()
+    # A cycle counter is not an observation or a decision index. No implicit
+    # warmup or sample-age rule may supply missing state/history facts.
     taus = range(-horizon, 1)
     facts: dict[str, dict[str, Any]] = {}
     blocked_inversions: dict[tuple[str, int, str], dict[str, Any]] = {}

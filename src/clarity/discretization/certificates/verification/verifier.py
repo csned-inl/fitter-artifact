@@ -8,7 +8,9 @@ from copy import deepcopy
 from typing import Any
 
 from .convex import verify_recorded_convex_certificate, verify_recorded_outer_reduction
-from .expressions import _serialized_expression_hash
+from .expressions import _serialized_expression_hash, _factored_expr_from_dict
+from ...model.proof_rules import ProofDeferred, prove_implication_exact
+from clarity.certification.equations import Const
 from .factored import _verify_lazy_factored_stage
 from .linear import verify_recorded_linear_certificate, verify_recorded_linear_counterexample
 from .reachability import (
@@ -79,7 +81,272 @@ def _resolve_shared_proof_certificates(
     return resolved, errors
 
 
-def verify_recorded_optimization_certificates(analysis: dict[str, Any]) -> list[str]:
+def _verify_stage(stage, case, shared_regions, shared_safety_queries) -> list[str]:
+    """Verify one attempt; callers must reject unsupported outcome labels."""
+    errors: list[str] = []
+    property_id = case.get("case_id", "unknown")
+    checker = stage.get("checker")
+    proof = stage.get("proof") or {}
+    if checker == "smt_fallback":
+        errors.extend(
+            f"property {property_id} smt fallback certificate: {error}"
+            for error in _verify_smt_stage(stage, case)
+        )
+        return errors
+    if checker == "smt_reachability":
+        errors.extend(
+            f"property {property_id} smt reachability certificate: {error}"
+            for error in _verify_smt_reachability_stage(stage, case)
+        )
+        return errors
+    if checker == "relational_invariant":
+        errors.extend(
+            f"property {property_id} relational invariant certificate: {error}"
+            for error in _verify_relational_invariant_stage(
+                stage,
+                case,
+                shared_regions,
+                shared_safety_queries,
+            )
+        )
+        return errors
+    if stage.get("outcome") == "VIOLATION":
+        if checker != "reachability_linear":
+            errors.append(
+                f"property {property_id} unsupported violation checker {checker}"
+            )
+            return errors
+        if proof.get("rule") != "exact_finite_prefix_counterexample_v1":
+            errors.append(
+                f"property {property_id} reachability violation proof rule is invalid"
+            )
+            return errors
+        obligations = proof.get("base_obligations", [])
+        replayed = [
+            obligation.get("attempt", {})
+            for obligation in obligations
+            if obligation.get("attempt", {}).get("outcome") == "VIOLATION"
+        ]
+        if not replayed:
+            errors.append(
+                f"property {property_id} reachability violation has no replayed obligation"
+            )
+        for attempt in replayed:
+            for error in verify_recorded_linear_counterexample(
+                attempt.get("proof") or {}
+            ):
+                errors.append(
+                    f"property {property_id} reachability counterexample: {error}"
+                )
+        return errors
+    if stage.get("outcome") != "CERTIFIED":
+        return errors
+    if proof.get("rule") == "lazy_factored_formula_coverage_v1":
+        errors.extend(
+            f"property {property_id} factored {checker} certificate: {error}"
+            for error in _verify_lazy_factored_stage(stage, case)
+        )
+        return errors
+    if checker == "exact_symbolic":
+        if proof.get("rule") != "reduced_case_exact_infeasibility_v2":
+            return ["exact symbolic proof rule is invalid"]
+        try:
+            replay = prove_implication_exact(
+                [_factored_expr_from_dict(case.get("expression"))], Const(False), set()
+            )
+        except (ProofDeferred, ValueError, TypeError, KeyError, ZeroDivisionError) as exc:
+            return [f"exact symbolic proof did not replay: {exc}"]
+        if replay.get("proved") is not True or replay != proof.get("within_interval_proof"):
+            return ["exact symbolic proof does not match the source obligation"]
+        return []
+    certificate = proof.get("certificate")
+    if checker == "linear":
+        if not isinstance(certificate, dict):
+            stage_errors = ["linear proof certificate is missing"]
+        else:
+            stage_errors = verify_recorded_linear_certificate(certificate)
+            stage_errors.extend(_verify_linear_certificate_source(
+                certificate,
+                proof,
+                case,
+            ))
+    elif checker == "convex":
+        if not isinstance(certificate, dict):
+            stage_errors = ["convex proof certificate is missing"]
+        else:
+            stage_errors = verify_recorded_convex_certificate(certificate)
+    elif checker in {"reachability_linear", "reachability_convex"}:
+        method = (
+            "linear"
+            if checker == "reachability_linear"
+            else "convex"
+        )
+        if proof.get("rule") != "finite_prefix_and_inductive_case_exclusion_v1":
+            stage_errors = ["reachability proof rule is invalid"]
+        elif proof.get("method") != method:
+            stage_errors = ["reachability proof method is invalid"]
+        else:
+            stage_errors = []
+            certified_depths = [
+                item
+                for item in proof.get("depth_attempts", [])
+                if item.get("proved") is True
+            ]
+            if not certified_depths:
+                stage_errors.append("reachability proof has no certified depth")
+            for depth in certified_depths:
+                obligations = (
+                    depth.get("base_obligations", [])
+                    + depth.get("induction_obligations", [])
+                )
+                if not obligations:
+                    stage_errors.append(
+                        "reachability proof has no arithmetic obligations"
+                    )
+                for obligation in obligations:
+                    attempt = obligation.get("attempt") or {}
+                    if obligation.get("outer_case_group") is True:
+                        if (
+                            not isinstance(
+                                obligation.get("covered_case_first_id"),
+                                str,
+                            )
+                            or not isinstance(
+                                obligation.get("covered_case_last_id"),
+                                str,
+                            )
+                            or not isinstance(
+                                obligation.get("covered_case_count"),
+                                int,
+                            )
+                            or obligation.get("covered_case_count") <= 1
+                        ):
+                            stage_errors.append(
+                                "reachability outer case group coverage is malformed"
+                            )
+                    certificate = (attempt.get("proof") or {}).get(
+                        "certificate"
+                    )
+                    attempt_rule = (attempt.get("proof") or {}).get(
+                        "rule"
+                    )
+                    if attempt.get("outcome") != "CERTIFIED":
+                        stage_errors.append(
+                            "reachability arithmetic obligation is not certified"
+                        )
+                    elif attempt_rule == "lazy_factored_formula_coverage_v1":
+                        obligation_expression = obligation.get("expression")
+                        if not isinstance(obligation_expression, dict):
+                            stage_errors.append(
+                                "reachability factored expression is malformed"
+                            )
+                        else:
+                            stage_errors.extend(
+                                "reachability factored certificate: " + error
+                                for error in _verify_lazy_factored_stage(
+                                    attempt,
+                                    {"expression": obligation_expression},
+                                )
+                            )
+                    elif not isinstance(certificate, dict):
+                        stage_errors.append(
+                            "reachability arithmetic certificate is missing"
+                        )
+                    elif certificate.get("kind") == "linear_infeasibility_weights_v1":
+                        stage_errors.extend(
+                            "reachability linear certificate: " + error
+                            for error in verify_recorded_linear_certificate(
+                                certificate
+                            )
+                        )
+                        stage_errors.extend(
+                            "reachability outer reduction: " + error
+                            for error in verify_recorded_outer_reduction(
+                                attempt.get("proof") or {},
+                                str(obligation.get("expression_sha256", "")),
+                            )
+                        )
+                    elif certificate.get("kind") == "convex_dual_bound_v1":
+                        stage_errors.extend(
+                            "reachability convex certificate: " + error
+                            for error in verify_recorded_convex_certificate(
+                                certificate
+                            )
+                        )
+                        stage_errors.extend(
+                            "reachability outer reduction: " + error
+                            for error in verify_recorded_outer_reduction(
+                                attempt.get("proof") or {},
+                                str(obligation.get("expression_sha256", "")),
+                            )
+                        )
+                    else:
+                        stage_errors.append(
+                            "reachability certificate kind is invalid"
+                        )
+    else:
+        return [f"unsupported successful proof checker: {checker}"]
+    if checker in {"linear", "convex"}:
+        stage_errors.extend(_verify_common_case_group(proof, case))
+    errors.extend(
+        f"property {property_id} {checker} certificate: {error}"
+        for error in stage_errors
+    )
+    return errors
+
+
+def verify_case_evidence(case, shared_regions, shared_safety_queries):
+    """Derive a case outcome from checked attempts, never its result label."""
+    errors: list[str] = []
+    attempts = case.get("progression")
+    if not isinstance(attempts, list) or not attempts:
+        return {"result": "NOT_CERTIFIED", "checker": None, "proof_rule": None,
+                "errors": ["no recorded proof attempts"]}
+    supported = {"linear", "convex", "reachability_linear", "reachability_convex",
+                 "exact_symbolic", "smt_fallback", "relational_invariant", "smt_reachability"}
+    terminal = None
+    seen = set()
+    for stage in attempts:
+        if not isinstance(stage, dict):
+            errors.append("proof attempt is malformed")
+            continue
+        checker, outcome = stage.get("checker"), stage.get("outcome")
+        if not isinstance(checker, str) or checker not in supported:
+            errors.append(f"unsupported proof checker: {checker}")
+            continue
+        if checker in seen:
+            errors.append(f"duplicate proof attempt: {checker}")
+        seen.add(checker)
+        if terminal is not None:
+            errors.append("proof attempts continue after a terminal result")
+        if outcome not in ("CERTIFIED", "VIOLATION", "DEFERRED"):
+            errors.append(f"invalid proof outcome: {outcome}")
+            continue
+        proof = stage.get("proof")
+        if not isinstance(proof, dict):
+            errors.append(f"{checker} proof is malformed")
+            continue
+        if outcome == "VIOLATION" and checker not in {"reachability_linear", "smt_reachability"}:
+            errors.append(f"unsupported violation checker: {checker}")
+            continue
+        # Empty deferral records establish nothing and need no proof replay.
+        stage_errors = [] if outcome == "DEFERRED" and not proof else _verify_stage(
+            stage, case, shared_regions, shared_safety_queries
+        )
+        errors.extend(stage_errors)
+        if outcome != "DEFERRED" and not stage_errors:
+            terminal = stage
+    return {
+        "result": terminal["outcome"] if terminal is not None and not errors else "NOT_CERTIFIED",
+        "checker": terminal.get("checker") if terminal is not None and not errors else None,
+        "proof_rule": terminal["proof"].get("rule") if terminal is not None and not errors else None,
+        "errors": errors,
+    }
+
+
+def verify_recorded_optimization_certificates(
+    analysis: dict[str, Any], *, case_results: dict | None = None
+) -> list[str]:
     errors: list[str] = []
     if not isinstance(analysis, dict):
         return ["recorded analysis is malformed"]
@@ -93,7 +360,7 @@ def verify_recorded_optimization_certificates(analysis: dict[str, Any]) -> list[
         property_id = property_record.get("property_id", "unknown")
         reduction = property_record.get("reduction") or {}
         if reduction.get("outcome") != "DEFERRED":
-            if reduction.get("kind") != "full_sysml_interval_reduction_v3":
+            if reduction.get("kind") != "full_sysml_interval_reduction_v4":
                 errors.append(f"property {property_id} reduction kind is invalid")
             counterexample = reduction.get("interval_counterexample")
             if not isinstance(counterexample, dict):
@@ -307,205 +574,12 @@ def verify_recorded_optimization_certificates(analysis: dict[str, Any]) -> list[
                             f"property {property_id} case {case.get('case_id')} expression hash is invalid"
                         )
 
-        stages = [
-            (case, stage)
-            for case in property_record.get("cases", [])
-            for stage in case.get("progression", [])
-        ]
-        for case, stage in stages:
-            checker = stage.get("checker")
-            proof = stage.get("proof") or {}
-            if checker == "smt_fallback":
-                errors.extend(
-                    f"property {property_id} smt fallback certificate: {error}"
-                    for error in _verify_smt_stage(stage, case)
-                )
-                continue
-            if checker == "smt_reachability":
-                errors.extend(
-                    f"property {property_id} smt reachability certificate: {error}"
-                    for error in _verify_smt_reachability_stage(stage, case)
-                )
-                continue
-            if checker == "relational_invariant":
-                errors.extend(
-                    f"property {property_id} relational invariant certificate: {error}"
-                    for error in _verify_relational_invariant_stage(
-                        stage,
-                        case,
-                        shared_regions,
-                        shared_safety_queries,
-                    )
-                )
-                continue
-            if stage.get("outcome") == "VIOLATION":
-                if checker != "reachability_linear":
-                    errors.append(
-                        f"property {property_id} unsupported violation checker {checker}"
-                    )
-                    continue
-                if proof.get("rule") != "exact_finite_prefix_counterexample_v1":
-                    errors.append(
-                        f"property {property_id} reachability violation proof rule is invalid"
-                    )
-                    continue
-                obligations = proof.get("base_obligations", [])
-                replayed = [
-                    obligation.get("attempt", {})
-                    for obligation in obligations
-                    if obligation.get("attempt", {}).get("outcome") == "VIOLATION"
-                ]
-                if not replayed:
-                    errors.append(
-                        f"property {property_id} reachability violation has no replayed obligation"
-                    )
-                for attempt in replayed:
-                    for error in verify_recorded_linear_counterexample(
-                        attempt.get("proof") or {}
-                    ):
-                        errors.append(
-                            f"property {property_id} reachability counterexample: {error}"
-                        )
-                continue
-            if stage.get("outcome") != "CERTIFIED":
-                continue
-            if proof.get("rule") == "lazy_factored_formula_coverage_v1":
-                errors.extend(
-                    f"property {property_id} factored {checker} certificate: {error}"
-                    for error in _verify_lazy_factored_stage(stage, case)
-                )
-                continue
-            certificate = proof.get("certificate")
-            if checker == "linear":
-                if not isinstance(certificate, dict):
-                    stage_errors = ["linear proof certificate is missing"]
-                else:
-                    stage_errors = verify_recorded_linear_certificate(certificate)
-                    stage_errors.extend(_verify_linear_certificate_source(
-                        certificate,
-                        proof,
-                        case,
-                    ))
-            elif checker == "convex":
-                if not isinstance(certificate, dict):
-                    stage_errors = ["convex proof certificate is missing"]
-                else:
-                    stage_errors = verify_recorded_convex_certificate(certificate)
-            elif checker in {"reachability_linear", "reachability_convex"}:
-                method = (
-                    "linear"
-                    if checker == "reachability_linear"
-                    else "convex"
-                )
-                if proof.get("rule") != "finite_prefix_and_inductive_case_exclusion_v1":
-                    stage_errors = ["reachability proof rule is invalid"]
-                elif proof.get("method") != method:
-                    stage_errors = ["reachability proof method is invalid"]
-                else:
-                    stage_errors = []
-                    certified_depths = [
-                        item
-                        for item in proof.get("depth_attempts", [])
-                        if item.get("proved") is True
-                    ]
-                    if not certified_depths:
-                        stage_errors.append("reachability proof has no certified depth")
-                    for depth in certified_depths:
-                        obligations = (
-                            depth.get("base_obligations", [])
-                            + depth.get("induction_obligations", [])
-                        )
-                        if not obligations:
-                            stage_errors.append(
-                                "reachability proof has no arithmetic obligations"
-                            )
-                        for obligation in obligations:
-                            attempt = obligation.get("attempt") or {}
-                            if obligation.get("outer_case_group") is True:
-                                if (
-                                    not isinstance(
-                                        obligation.get("covered_case_first_id"),
-                                        str,
-                                    )
-                                    or not isinstance(
-                                        obligation.get("covered_case_last_id"),
-                                        str,
-                                    )
-                                    or not isinstance(
-                                        obligation.get("covered_case_count"),
-                                        int,
-                                    )
-                                    or obligation.get("covered_case_count") <= 1
-                                ):
-                                    stage_errors.append(
-                                        "reachability outer case group coverage is malformed"
-                                    )
-                            certificate = (attempt.get("proof") or {}).get(
-                                "certificate"
-                            )
-                            attempt_rule = (attempt.get("proof") or {}).get(
-                                "rule"
-                            )
-                            if attempt.get("outcome") != "CERTIFIED":
-                                stage_errors.append(
-                                    "reachability arithmetic obligation is not certified"
-                                )
-                            elif attempt_rule == "lazy_factored_formula_coverage_v1":
-                                obligation_expression = obligation.get("expression")
-                                if not isinstance(obligation_expression, dict):
-                                    stage_errors.append(
-                                        "reachability factored expression is malformed"
-                                    )
-                                else:
-                                    stage_errors.extend(
-                                        "reachability factored certificate: " + error
-                                        for error in _verify_lazy_factored_stage(
-                                            attempt,
-                                            {"expression": obligation_expression},
-                                        )
-                                    )
-                            elif not isinstance(certificate, dict):
-                                stage_errors.append(
-                                    "reachability arithmetic certificate is missing"
-                                )
-                            elif certificate.get("kind") == "linear_infeasibility_weights_v1":
-                                stage_errors.extend(
-                                    "reachability linear certificate: " + error
-                                    for error in verify_recorded_linear_certificate(
-                                        certificate
-                                    )
-                                )
-                                stage_errors.extend(
-                                    "reachability outer reduction: " + error
-                                    for error in verify_recorded_outer_reduction(
-                                        attempt.get("proof") or {},
-                                        str(obligation.get("expression_sha256", "")),
-                                    )
-                                )
-                            elif certificate.get("kind") == "convex_dual_bound_v1":
-                                stage_errors.extend(
-                                    "reachability convex certificate: " + error
-                                    for error in verify_recorded_convex_certificate(
-                                        certificate
-                                    )
-                                )
-                                stage_errors.extend(
-                                    "reachability outer reduction: " + error
-                                    for error in verify_recorded_outer_reduction(
-                                        attempt.get("proof") or {},
-                                        str(obligation.get("expression_sha256", "")),
-                                    )
-                                )
-                            else:
-                                stage_errors.append(
-                                    "reachability certificate kind is invalid"
-                                )
-            else:
-                continue
-            if checker in {"linear", "convex"}:
-                stage_errors.extend(_verify_common_case_group(proof, case))
+        for case in property_record.get("cases", []):
+            verified = verify_case_evidence(case, shared_regions, shared_safety_queries)
             errors.extend(
-                f"property {property_id} {checker} certificate: {error}"
-                for error in stage_errors
+                f"property {property_id} case {case.get('case_id')}: {error}"
+                for error in verified["errors"]
             )
+            if case_results is not None:
+                case_results[(property_id, case.get("case_id"))] = verified
     return errors

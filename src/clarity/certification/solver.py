@@ -33,6 +33,8 @@ class TypeEnv:
         prev = self.sorts.get(name)
         if prev is None:
             self.sorts[name] = sort
+        elif prev == 'Int' and sort == 'Real':
+            pass  # Integer may be used in a real expression without changing its declaration.
         elif prev != sort:
             self.conflicts.append(f"{name}: {prev} vs {sort}")
 
@@ -65,6 +67,8 @@ def _var_symbol(
 def _merge_sort(a: str, b: str) -> str:
     if a == b:
         return a
+    if {a, b} <= {'Int', 'Real'}:
+        return 'Real'
     return "Unknown"
 
 
@@ -72,8 +76,10 @@ def _expr_sort(expr: Expr, env: TypeEnv, expected: str | None = None) -> str:
     if isinstance(expr, Const):
         if isinstance(expr.value, bool):
             return "Bool"
-        if isinstance(expr.value, (int, float)):
-            return "Real"
+        if type(expr.value) is int:
+            return 'Int'
+        if type(expr.value) is float:
+            return 'Real' 
         return "Unknown"
     if isinstance(expr, RawRef):
         env.require(expr.path, expected or env.sorts.get(expr.path, "Real"))
@@ -100,25 +106,24 @@ def _expr_sort(expr: Expr, env: TypeEnv, expected: str | None = None) -> str:
                 _expr_sort(arg, env, "Real")
             return "Bool"
         if expr.op == "==":
-            if expected == "Bool":
-                for arg in expr.args:
-                    _expr_sort(arg, env, "Bool")
-            else:
-                left_sort = _expr_sort(expr.args[0], env, expected)
-                right_expected = left_sort if left_sort != "Unknown" else expected
-                _expr_sort(expr.args[1], env, right_expected)
-            return "Bool"
+            left_sort = _expr_sort(expr.args[0], env)
+            right_sort = _expr_sort(expr.args[1], env,
+                                    left_sort if left_sort == 'Bool' else None)
+            if (left_sort == 'Bool') != (right_sort == 'Bool'):
+                env.conflicts.append('Boolean/numeric equality')
+            return 'Bool'
         if expr.op in ARITH_OPS:
-            for arg in expr.args:
-                _expr_sort(arg, env, "Real")
-            return "Real"
+            sorts = [_expr_sort(arg, env, 'Real') for arg in expr.args]
+            if expr.op == '/' or 'Real' in sorts:
+                return 'Real'
+            return 'Int' if all(sort == 'Int' for sort in sorts) else 'Unknown'
     return "Unknown"
 
 
 def infer_sorts(model: EquationModel) -> tuple[dict[str, str], list[str]]:
-    env = TypeEnv()
+    env = TypeEnv(dict(model.declared_sorts))
     for name in model.constants:
-        env.require(name, "Real")
+        env.require(name, model.declared_sorts.get(name, 'Real'))
     for eq in model.terminals.values():
         _expr_sort(eq.expr, env, "Bool")
     for eq in model.requirements.values():
@@ -128,7 +133,9 @@ def infer_sorts(model: EquationModel) -> tuple[dict[str, str], list[str]]:
     for name, eq in model.observations.items():
         _expr_sort(eq.expr, env, env.sorts.get(name))
     for name, eq in model.transitions.items():
-        _expr_sort(eq.expr, env, env.sorts.get(name))
+        result_sort = _expr_sort(eq.expr, env, env.sorts.get(name))
+        if env.sorts.get(name) == 'Int' and result_sort != 'Int':
+            env.conflicts.append(f'{name}: {result_sort} expression assigned to Integer')
     for name in model.state | model.actions | model.constants:
         if name not in env.sorts:
             env.require(name, "Real")
@@ -302,7 +309,7 @@ class Encoder:
         if key not in self.next_cache:
             eq = self.model.transitions.get(name)
             if eq is None:
-                self.next_cache[key] = self.current_var(run, name)
+                raise ValueError(f"missing source transition or justified hold: {name}")
             else:
                 self.next_cache[key] = self.encode_expr(eq.expr, run, "current")
         return self.next_cache[key]
@@ -413,6 +420,8 @@ def one_step_transition_closure(
 
     sorts, type_conflicts = infer_sorts(model)
     unsupported = unsupported_reasons(model, q)
+    unsupported += [f"missing source transition or justified hold: {name}"
+                    for name in sorted(model.state - set(model.transitions))]
     if type_conflicts or unsupported:
         return {
             "status": "unknown",

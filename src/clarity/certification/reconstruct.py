@@ -61,21 +61,10 @@ def get_strict_model(path, *, dt, enable_sampled_memory=True):
     for eq in eq_model.observations.values():
         obs |= {ref for ref in equation_refs(eq_model, eq) if ref in eq_model.state}
 
-    sampled_memories, assumptions = ([], [])
-    if enable_sampled_memory:
-        sampled_memories, assumptions = sampled_memory_rules(eq_model, dt)
-
-    schedule_state = sorted(deterministic_state_variables(eq_model) | {
-        rule["schedule_state"] for rule in sampled_memories
-        if rule.get("schedule_state") in eq_model.state
-    })
-    if schedule_state:
-        assumptions.insert(
-            0,
-            "deterministic_schedule_known: verifier treats these state values as "
-            f"known schedule counters because their equations depend only on themselves: "
-            f"{schedule_state}",
-        )
+    sampled_memories, assumptions = [], []
+    schedule_state = []
+    # A finite age bound does not identify the delivered sample. Derive any
+    # eliminations from the composed source execution before adding rules here.
 
     return dict(
         STATE=eq_model.state,
@@ -95,6 +84,9 @@ def get_strict_model(path, *, dt, enable_sampled_memory=True):
 
 def reconstruct(model, b_obs, b_act, horizon=8, target=None):
     STATE = model["STATE"]; nsupp = model["nsupp"]; copies = model["copies"]
+    missing = sorted(STATE - set(nsupp))
+    if missing:
+        raise ValueError("missing source transition or justified hold: " + ", ".join(missing))
     OBS = model["OBS"]; ACT = model["ACTIONS"]
     sampled_memories = model.get("sampled_memories", [])
     if target is None:
@@ -112,7 +104,7 @@ def reconstruct(model, b_obs, b_act, horizon=8, target=None):
     while changed:
         changed = False
         for v in STATE:
-            supp = nsupp.get(v, set())
+            supp = nsupp[v]
             for tau in taus:
                 if tau + 1 in taus and (v, tau + 1) not in known and \
                         all((u, tau) in known for u in supp):

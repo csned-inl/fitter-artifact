@@ -204,7 +204,7 @@ package CruiseControl {
         connect controller.brakeCmdPort to brake.cmdIn;
         connect speedSensor.upstreamPort to controller.speedometerPort;
 
-        attribute currentTime : Real = 0;
+        attribute currentTime : Real := 0;
         attribute lastObservedSpeed : Real = speedSensor.lastReadingMps;
         attribute lastObservedGap : Real = speedSensor.lastGapMeters;
 
@@ -274,11 +274,11 @@ package CruiseControl {
 
     part system : CruiseControlSystem {
         part :>> vehicle {
-            attribute :>> speedMps = 0.0;
+            attribute :>> speedMps := 0.0;
             attribute :>> massKg = 1500.0;
             attribute :>> dragCoefficient = 0.4;
             attribute :>> roadGradePercent = 0.0;
-            attribute :>> gapMeters = 100.0;
+            attribute :>> gapMeters := 100.0;
             #ScenarioInput attribute :>> leadSpeedMps = 20.0;
         }
 

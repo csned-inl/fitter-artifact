@@ -84,7 +84,7 @@ def compute_transition_closed_relevance(model: EquationModel) -> RelevanceResult
     changed = True
     while changed:
         changed = False
-        for target, eq in model.transitions.items():
+        for target, eq in {**model.transitions, **model.sample_events}.items():
             if target not in q:
                 continue
             refs = equation_refs(model, eq)

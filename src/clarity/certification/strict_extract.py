@@ -72,7 +72,9 @@ class CertificationExtractor:
                     ] = type_name
 
     def extract(self) -> EquationModel:
+        from .sampled_values import register_message_values, finish_value_semantics
         self._augment_state_from_step_body_assignments()
+        register_message_values(self)
         self._extract_initial_values()
         self._diagnose_parser_surface()
         self._build_same_cycle_definitions()
@@ -80,6 +82,19 @@ class CertificationExtractor:
         self._build_observation_equations()
         self._build_requirement_equations()
         self._build_transition_equations()
+        finish_value_semantics(self)
+        from .ordered_execution import build_execution_description
+        self.model.execution = build_execution_description(self.parser).to_dict()
+        self.model.declared_sorts = {
+            self.canonical_name(name.split('::')): {'Boolean': 'Bool', 'Integer': 'Int', 'Real': 'Real'}[sort]
+            for name, sort in self.model.execution['value_types'].items()
+            if sort in {'Boolean', 'Integer', 'Real'}
+        }
+        for diagnostic in self.model.execution['diagnostics']:
+            self.model.add_diagnostic('error', diagnostic['code'], diagnostic['message'], diagnostic['source'])
+        for name in sorted(self.model.state - set(self.model.transitions)):
+            self.model.add_diagnostic('error', 'missing_ordered_update',
+                'no decision transition or source-justified hold', name)
         self._audit_equations()
         return self.model
 
@@ -148,7 +163,7 @@ class CertificationExtractor:
             part_def = self.parser.part_defs.get(part_type or "")
             if part_def is None:
                 continue
-            for attribute, text in part_def.derived_attributes.items():
+            for attribute, text in part_def.initial_attributes.items():
                 target = self.legacy.canonical_name(
                     [attribute] if instance_name is None
                     else [instance_name, attribute]
@@ -161,10 +176,17 @@ class CertificationExtractor:
                     continue
                 if isinstance(expression, LiteralExpr):
                     self.model.initial_values[target] = expression.value
+                else:
+                    self.model.add_diagnostic(
+                        "error", "nonliteral_initial_value_requires_proof",
+                        "the initial expression is preserved but cannot be replaced "
+                        "by an unconstrained initial value", target,
+                    )
 
         for parameter in self.parser.parameters:
             target = self.legacy.canonical_name(parameter.qualified_name.split("::"))
-            if target in self.model.state and "ScenarioInput" not in parameter.metadata:
+            if (target in self.model.state and parameter.value_kind == "initial"
+                    and "ScenarioInput" not in parameter.metadata):
                 self.model.initial_values[target] = parameter.value
 
     def _inst_name(self, fqn: str) -> str:

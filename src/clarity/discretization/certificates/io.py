@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 3
-CERTIFICATE_KIND = "discretization_safety_certificate_v3"
+SCHEMA_VERSION = 5
+CERTIFICATE_KIND = "discretization_safety_certificate_v5"
 
 
 def canonical_json_bytes(value: Any) -> bytes:

@@ -12,6 +12,7 @@ The SysML requirement check still reads the simulator's current raw
 from __future__ import annotations
 
 import numpy as np
+from dataclasses import replace
 
 from clarity.runtime.env import SysMLEnv
 
@@ -21,9 +22,9 @@ class BufferedDiscreteEnv(SysMLEnv):
 
     def __init__(self, model_path: str, dt: float, max_steps: int = 5000,
                  phase: int = 2, rng_seed: int | None = None,
-                 n_act: int = 1, n_obs: int = 0):
+                 n_act: int = 1, n_obs: int = 0, observation_scale=None):
         super().__init__(model_path, dt=dt, max_steps=max_steps,
-                         phase=phase, rng_seed=rng_seed)
+                         phase=phase, rng_seed=rng_seed, observation_scale=observation_scale)
         self._base_obs_dim = self.obs_dim
         self._n_act = int(n_act)
         self._n_obs = int(n_obs)
@@ -70,8 +71,9 @@ class BufferedDiscreteEnv(SysMLEnv):
     def _push_act(self, action: int) -> None:
         self._act_hist = ([self._onehot(action)] + self._act_hist)[:self._n_act]
 
-    def reset(self, seed: int | None = None) -> np.ndarray:
-        obs = super().reset(seed=seed)
+    def reset_with_result(self, seed: int | None = None):
+        result = super().reset_with_result(seed=seed)
+        obs = result.observation
         self._obs_hist = [
             np.zeros(self._base_obs_dim, dtype=np.float32)
             for _ in range(self._n_obs)
@@ -80,13 +82,18 @@ class BufferedDiscreteEnv(SysMLEnv):
             np.zeros(self._n_actions, dtype=np.float32)
             for _ in range(self._n_act)
         ]
+        if obs is None:
+            return result
         aug = self._augment(obs)
         self._push_obs(obs)
-        return aug
+        self.reset_result = replace(result, observation=aug)
+        return self.reset_result
 
     def step(self, action: int):
-        self._push_act(action)
         obs, reward, done, info = super().step(action)
+        self._push_act(action)
+        if obs is None:
+            return None, reward, done, info
         aug = self._augment(obs)
         self._push_obs(obs)
         return aug, reward, done, info

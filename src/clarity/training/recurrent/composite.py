@@ -46,8 +46,12 @@ class Composite:
             u = rng.random(size=logits.shape[-1])
             g = -np.log(-np.log(np.clip(u, 1e-30, None)))
             proposed = int(np.argmax(logits[0] + g))
-        obs_dict = {name: float(raw_obs.get(name, 0))
-                    for name in self.obs_names}
+        missing = set(self.obs_names) - set(raw_obs)
+        if missing:
+            raise ValueError("missing source shield inputs: " + ", ".join(sorted(missing)))
+        obs_dict = {name: raw_obs[name] for name in self.obs_names}
+        if any(value is None for value in obs_dict.values()):
+            raise ValueError("unavailable source shield input")
         t2 = time.perf_counter_ns()
         final = self.spec_shield(proposed, obs_dict)
         t3 = time.perf_counter_ns()

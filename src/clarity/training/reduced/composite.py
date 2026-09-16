@@ -31,10 +31,10 @@ class ProgramShieldComposite:
                 "SysML simulation omitted controller inputs: "
                 + ", ".join(missing)
             )
-        return {
-            name: value if isinstance(value := raw_obs[name], bool) else float(value)
-            for name in self.obs_names
-        }
+        inputs = {name: raw_obs[name] for name in self.obs_names}
+        if any(value is None for value in inputs.values()):
+            raise ValueError("unavailable source shield input")
+        return inputs
 
     def requirement_holds(self, action: int, raw_obs: dict) -> bool:
         """Check the executed action against the current SysML requirement."""

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 import warnings
+from contextvars import ContextVar
 
 warnings.filterwarnings("ignore")
 
@@ -19,6 +20,19 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+_RESOLVING_VALUES = ContextVar("clarity_resolving_values", default=frozenset())
+
+
+class BoundExpression:
+    """A live source binding, evaluated on the state at the time of the read."""
+
+    def __init__(self, expression, context, ref_bindings, system):
+        self.expression = expression
+        self.context = context
+        self.ref_bindings = ref_bindings
+        self.system = system
+
 
 class BindRef:
     """Marks a state entry as an alias for another state key."""
@@ -32,16 +46,23 @@ class BindRef:
 
 
 def resolve_value(state: dict, key: str) -> Any:
-    """Follow any BindRef chain in state to return the underlying value."""
-    seen: set = set()
-    while True:
-        val = state.get(key)
-        if not isinstance(val, BindRef):
-            return val
-        if key in seen:
-            return None  # cycle guard
-        seen.add(key)
-        key = val.target_key
+    """Read a stored value or evaluate its live source binding."""
+    seen = _RESOLVING_VALUES.get()
+    identity = (id(state), key)
+    if identity in seen:
+        raise ValueError(f"cyclic source binding: {key}")
+    token = _RESOLVING_VALUES.set(seen | {identity})
+    try:
+        value = state.get(key)
+        if isinstance(value, BindRef):
+            return resolve_value(state, value.target_key)
+        if isinstance(value, BoundExpression):
+            return ExpressionEvaluator(
+                state, value.context, value.ref_bindings, value.system, strict=True
+            ).evaluate(value.expression)
+        return value
+    finally:
+        _RESOLVING_VALUES.reset(token)
 
 
 def canonical_key(state: dict, key: str) -> str:
@@ -49,7 +70,7 @@ def canonical_key(state: dict, key: str) -> str:
     seen: set = set()
     while isinstance(state.get(key), BindRef):
         if key in seen:
-            return key  # cycle guard
+            raise ValueError(f"cyclic source binding: {key}")
         seen.add(key)
         key = state[key].target_key
     return key
@@ -76,7 +97,9 @@ class ExpressionEvaluator:
     """Evaluates parsed expressions against a state dictionary."""
 
     def __init__(self, state: dict[str, Any], context: str = "",
-                 ref_bindings: dict[str, str] = None, system: str = ""):
+                 ref_bindings: dict[str, str] = None, system: str = "",
+                 *, strict: bool = False):
+        self.strict = strict
         self.state = state
         self.context = context
         self.ref_bindings = ref_bindings or {}
@@ -87,51 +110,58 @@ class ExpressionEvaluator:
             return expr.value
 
         elif isinstance(expr, RefExpr):
-            return self._resolve_ref(expr.path)
+            value = self._resolve_ref(expr.path)
+            if self.strict and value is None:
+                raise ValueError(f"unresolved requirement reference {'.'.join(expr.path)}")
+            return value
 
         elif isinstance(expr, BinaryExpr):
-            if expr.op == 'implies':
-                left = self.evaluate(expr.left)
-                if not left:
-                    return True
-                return self.evaluate(expr.right)
-
             left = self.evaluate(expr.left)
+            if expr.op in {"and", "or", "implies"}:
+                if type(left) is not bool:
+                    raise ValueError(f"non-Boolean left operand for {expr.op}")
+                if expr.op == "and" and not left:
+                    return False
+                if expr.op == "or" and left:
+                    return True
+                if expr.op == "implies" and not left:
+                    return True
+                right = self.evaluate(expr.right)
+                if type(right) is not bool:
+                    raise ValueError(f"non-Boolean right operand for {expr.op}")
+                return right
             right = self.evaluate(expr.right)
-
-            # Handle None values
-            if left is None:
-                left = 0.0 if expr.op in ['+', '-', '*', '/', '>=', '<=', '>', '<'] else False
-            if right is None:
-                right = 0.0 if expr.op in ['+', '-', '*', '/', '>=', '<=', '>', '<'] else False
-
+            if left is None or right is None:
+                raise ValueError(f"undefined operand for {expr.op}")
+            if expr.op != "==" and (type(left) not in (int, float) or type(right) not in (int, float)):
+                raise ValueError(f"non-numeric operand for {expr.op}")
+            if expr.op == "==" and (type(left) is bool) != (type(right) is bool):
+                raise ValueError("incompatible Boolean/numeric equality")
+            if expr.op == '/' and right == 0:
+                raise ValueError("division by zero in source expression")
             ops = {
-                '+': lambda a, b: a + b,
-                '-': lambda a, b: a - b,
-                '*': lambda a, b: a * b,
-                '/': lambda a, b: a / b if b != 0 else 0,
-                '==': lambda a, b: a == b,
-                '>=': lambda a, b: a >= b,
-                '<=': lambda a, b: a <= b,
-                '>': lambda a, b: a > b,
+                '+': lambda a, b: a + b, '-': lambda a, b: a - b,
+                '*': lambda a, b: a * b, '/': lambda a, b: a / b,
+                '==': lambda a, b: a == b, '>=': lambda a, b: a >= b,
+                '<=': lambda a, b: a <= b, '>': lambda a, b: a > b,
                 '<': lambda a, b: a < b,
-                'and': lambda a, b: a and b,
-                'or': lambda a, b: a or b,
             }
+            if expr.op not in ops:
+                raise ValueError(f"unsupported source operator {expr.op}")
             return ops[expr.op](left, right)
-
         elif isinstance(expr, TernaryExpr):
             cond = self.evaluate(expr.condition)
+            if type(cond) is not bool:
+                raise ValueError("non-Boolean conditional guard")
             return self.evaluate(expr.true_expr) if cond else self.evaluate(expr.false_expr)
-
         elif isinstance(expr, UnaryExpr):
             val = self.evaluate(expr.operand)
-            if expr.op == 'not':
+            if expr.op == 'not' and type(val) is bool:
                 return not val
-            elif expr.op == '-':
-                return -(val or 0)
-
-        return None
+            if expr.op == '-' and type(val) in (int, float):
+                return -val
+            raise ValueError(f"invalid operand for {expr.op}")
+        raise ValueError(f"unsupported source expression {type(expr).__name__}")
 
     def _resolve_ref(self, path: list[str]) -> Any:
         """Resolve a reference path to a value in the state, following any BindRefs."""
@@ -221,22 +251,33 @@ class ConstraintSolver:
         """Solve all constraints given current state machine states."""
         self._set_state_predicates(current_sm_states)
 
-        # Solve derived attributes
+        # Bindings remain live when their dependencies change during actions.
         for attr in self.derived_attrs:
-            evaluator = ExpressionEvaluator(self.state, attr.context,
-                                            self.ref_bindings, self.system)
-            value = evaluator.evaluate(attr.expression)
-            self.state[attr.qualified_name] = value
+            self.state[attr.qualified_name] = BoundExpression(
+                attr.expression, attr.context, self.ref_bindings, self.system
+            )
 
-        # Solve state-based constraints (implies)
-        for constraint in self.state_constraints:
-            self._solve_implies_constraint(constraint)
-
-        # Solve assignment constraints with flow propagation
-        for _ in range(3):
+        # Evaluate dependency chains without manufacturing values for unknowns.
+        # A bounded failure is an explicit execution error, never a proof of a
+        # stationary state or permission to keep an old dependent value.
+        unresolved = {}
+        for _ in range(len(self.constraints) + len(self.flows) + 2):
+            before = dict(self.state)
+            unresolved = {}
+            for constraint in self.state_constraints + self.assignment_constraints:
+                try:
+                    if constraint in self.state_constraints:
+                        self._solve_implies_constraint(constraint)
+                    else:
+                        self._solve_assignment_constraint(constraint)
+                except ValueError as exc:
+                    unresolved[constraint.name] = str(exc)
             self._propagate_flows()
-            for constraint in self.assignment_constraints:
-                self._solve_assignment_constraint(constraint)
+            if self.state == before:
+                if unresolved:
+                    raise ValueError(f"unresolved source constraints: {unresolved}")
+                return
+        raise ValueError(f"source constraint propagation did not converge: {unresolved}")
 
     def _set_state_predicates(self, current_sm_states: dict[str, str]):
         """Set boolean predicates for state machine states, one per instance."""
@@ -351,6 +392,34 @@ class SimulationEngine:
         self.port_mailboxes: dict[str, list] = {}
         self.time = 0.0
         self.model = None  # Neural policy function: dict -> dict
+        self._value_pair_inventory = None
+        self.requirement_ledger = None
+
+    def record_requirements(self, boundary, source=""):
+        if self.requirement_ledger is not None:
+            self.requirement_ledger.record(self, boundary, source)
+
+    def state_value_pairs(self) -> list[dict]:
+        """Read current physical and held values without substituting either.
+
+        An unreceived sample is explicitly unavailable, never synthesized from
+        the current physical value. Reading this snapshot does not advance time.
+        """
+        if self._value_pair_inventory is None:
+            from clarity.certification.strict_extract import extract_equation_model
+            self._value_pair_inventory = extract_equation_model(
+                self.parser.file_path
+            ).state_value_pairs
+        result = []
+        for pair in self._value_pair_inventory:
+            values = {}
+            for role in ("physical", "sampled"):
+                key = pair.get(role + "_runtime_key")
+                value = resolve_value(self.state, key) if key else None
+                values[role] = {"state_variable": pair[role + "_value"],
+                                "available": value is not None, "value": value}
+            result.append({"engine_time": self.time, **values})
+        return result
 
     def initialize(self, overrides: dict[str, float] = None) -> None:
         overrides = overrides or {}
@@ -411,6 +480,35 @@ class SimulationEngine:
         for attr in self.parser.derived_attributes:
             self.solver.add_derived_attribute(attr)
 
+        # Initial values are evaluated once, not on each solve/step. Literal
+        # redefinitions are already installed above as parameters.
+        for attr in self.parser.derived_attributes:
+            self.state[attr.qualified_name] = BoundExpression(
+                attr.expression, attr.context, self.parser.ref_bindings,
+                self.parser.system_part,
+            )
+        pending = list(self.parser.initial_attributes)
+        for attr in pending:
+            self.state.pop(attr.qualified_name, None)
+        while pending:
+            remaining = []
+            for attr in pending:
+                try:
+                    value = ExpressionEvaluator(
+                        self.state, attr.context, self.parser.ref_bindings,
+                        self.parser.system_part, strict=True,
+                    ).evaluate(attr.expression)
+                except ValueError as exc:
+                    if "unresolved requirement reference" not in str(exc):
+                        raise
+                    remaining.append(attr)
+                    continue
+                self.state[attr.qualified_name] = value
+            if len(remaining) == len(pending):
+                raise ValueError("unresolved or cyclic initial values: " +
+                                 ", ".join(a.qualified_name for a in remaining))
+            pending = remaining
+
         # Initial constraint solving
         self.solver.solve(self.current_sm_state)
 
@@ -430,6 +528,7 @@ class SimulationEngine:
             self._execute_action_stmts(stmts, fqn)
 
         self.time += dt
+        self.record_requirements("cycle_end")
 
     def _process_state_machine(self, inst_fqn: str) -> bool:
         """Try to fire one transition for the given instance. Returns True if fired."""
@@ -540,7 +639,7 @@ class SimulationEngine:
         dest_port_key = self._find_connected_port(sender_port_key)
         if dest_port_key:
             mailbox = self.port_mailboxes.setdefault(dest_port_key, [])
-            new_item = {'type': type_name, 'attrs': attrs}
+            new_item = {'type': type_name, 'attrs': dict(attrs)}
             for i, existing in enumerate(mailbox):
                 if existing['type'] == type_name:
                     mailbox[i] = new_item
@@ -598,7 +697,7 @@ class SimulationEngine:
                     if value is not None:
                         local_items[stmt.target[0]]['attrs'][attr_key] = value
                         state_key = f"{context}::" + "::".join(stmt.target)
-                        self.state[state_key] = value
+                        self._assign_value(state_key, value)
                 else:
                     key = f"{context}::" + "::".join(stmt.target)
                     value = evaluator.evaluate(stmt.expr)
@@ -606,8 +705,8 @@ class SimulationEngine:
                         ckey = canonical_key(self.state, key)
                         cap = self._capacity_for(ckey)
                         if cap is not None:
-                            value = min(cap, value)
-                        self.state[ckey] = value
+                            raise ValueError("implicit capacity clamp is not a source assignment")
+                        self._assign_value(ckey, value)
             elif isinstance(stmt, SendStmt):
                 if stmt.item_name in local_items:
                     item = local_items[stmt.item_name]
@@ -622,6 +721,8 @@ class SimulationEngine:
                                 break
             elif isinstance(stmt, IfStmt):
                 cond_val = evaluator.evaluate(stmt.condition)
+                if type(cond_val) is not bool:
+                    raise ValueError("source action guard is not Boolean")
                 if cond_val:
                     self._execute_action_stmts(stmt.body, context, local_items)
                 elif stmt.else_body:
@@ -646,11 +747,17 @@ class SimulationEngine:
                             for attr_path, val in item.get('attrs', {}).items():
                                 state_key = f"{context}::{stmt.var_name}::{attr_path.replace('.', '::')}"
                                 self.state[state_key] = val
+                        self.record_requirements("accept", port_key)
                         mailbox.pop(i)
                         break
+                else:
+                    raise ValueError(f"blocked source accept: {port_key} expects {stmt.type_name}")
             elif isinstance(stmt, AttributeDeclStmt):
                 if stmt.init_expr:
-                    value = evaluator.evaluate(stmt.init_expr)
+                    value = (BoundExpression(stmt.init_expr, context,
+                                            self.parser.ref_bindings, self.parser.system_part)
+                             if stmt.value_kind == "binding"
+                             else evaluator.evaluate(stmt.init_expr))
                     if value is not None:
                         self.state[f"{context}::{stmt.name}"] = value
             elif isinstance(stmt, SubactionCallStmt):
@@ -703,6 +810,14 @@ class SimulationEngine:
                 return param.value
         return None
 
+    def _assign_value(self, key: str, value: Any) -> None:
+        key = canonical_key(self.state, key)
+        if (key in self.parser.bound_value_keys
+                or isinstance(self.state.get(key), BoundExpression)):
+            raise ValueError(f"assignment to bound feature {key}")
+        self.state[key] = value
+        self.record_requirements("assignment", key)
+
     def _apply_step_actions(self, dt: float) -> None:
         """Evaluate and apply all owned step actions for one timestep."""
         self.state['dt'] = dt
@@ -714,8 +829,8 @@ class SimulationEngine:
             if new_value is not None:
                 cap = self._capacity_for(sa.target_key)
                 if cap is not None:
-                    new_value = min(cap, new_value)
-                self.state[canonical_key(self.state, sa.target_key)] = new_value
+                    raise ValueError("implicit capacity clamp is not a source assignment")
+                self._assign_value(sa.target_key, new_value)
 
     def get_status(self) -> dict:
         # Report the controller's state; fall back to any instance
@@ -758,12 +873,17 @@ class SimulationEngine:
         for req in self.parser.parsed_requirements:
             evaluator = ExpressionEvaluator(
                 self.state, req.context,
-                self.parser.ref_bindings, self.parser.system_part)
+                self.parser.ref_bindings, self.parser.system_part, strict=True)
             try:
-                status = bool(evaluator.evaluate(req.expression))
-            except Exception:
-                status = False
-            kind = req.metadata[0] if req.metadata else None
+                status = evaluator.evaluate(req.expression)
+                if type(status) is not bool:
+                    raise ValueError("requirement expression is not Boolean")
+            except Exception as exc:
+                raise ValueError(
+                    f"cannot evaluate SysML requirement {req.name!r}: {exc}"
+                ) from exc
+            kinds = sorted(set(req.metadata) & {"Prohibition", "Obligation"})
+            kind = kinds[0] if kinds else None
             result[req.name] = {"kind": kind, "status": status}
         return result
 

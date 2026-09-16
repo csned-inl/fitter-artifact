@@ -18,13 +18,13 @@ from clarity.sysml.runtime_settings import DEFAULT_DT, validate_dt
 
 def _observation(raw: dict[str, Any], names: list[str]) -> dict[str, float | bool]:
     return {
-        name: value if isinstance(value := raw[name], bool) else float(value)
+        name: raw[name]
         for name in names
     }
 
 
 def evaluate(model_path: Path, episodes: int, seed: int, dt: float,
-             max_steps: int) -> dict[str, Any]:
+             max_steps: int, observation_scale=None) -> dict[str, Any]:
     dt = validate_dt(dt)
     model = inspect_sysml(model_path)
     base = {
@@ -50,41 +50,64 @@ def evaluate(model_path: Path, episodes: int, seed: int, dt: float,
     shield = interface["spec_shield"]
     observation_names = list(interface["obs_names"])
     env = SysMLEnv(
-        str(model.path), dt=dt, max_steps=max_steps, phase=2, rng_seed=seed
+        str(model.path), dt=dt, max_steps=max_steps, phase=2, rng_seed=seed, observation_scale=observation_scale
     )
     counts = {
         "episodes": 0,
         "successes": 0,
         "safety_violations": 0,
+        "evaluation_errors": 0,
         "truncations": 0,
         "steps": 0,
         "overrides": 0,
         "pointwise_checks": 0,
         "pointwise_failures": 0,
     }
+    execution_errors = []
+    checks = {}
+    failures = {}
     try:
         for episode in range(episodes):
-            env.reset(seed=seed + episode)
-            done = False
+            initial = env.reset_with_result(seed=seed + episode)
+            done = initial.outcome != "decision"
             last_reward = 0.0
-            requirement_violated = False
+            failed_properties: set[str] = set(initial.violations)
+            error_episode = initial.outcome == 'error'
+            for name, entry in initial.statuses.items():
+                checks[name] = checks.get(name, 0) + entry['checks']
+            if initial.outcome == 'terminal':
+                last_reward = 1.0
             while not done:
-                obs = _observation(env.model_inputs, observation_names)
-                action = int(spec_oracle(shield, obs))
-                executed = int(shield(action, obs))
+                try:
+                    obs = _observation(env.model_inputs, observation_names)
+                    action = int(spec_oracle(shield, obs))
+                    executed = int(shield(action, obs))
+                except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    error_episode = True
+                    execution_errors.append({'episode': episode, 'error': str(exc),
+                                             'inputs': env.model_inputs})
+                    break
                 counts["pointwise_checks"] += 1
                 if executed != action:
                     counts["pointwise_failures"] += 1
                     counts["overrides"] += 1
-                if int(shield(executed, obs)) != executed:
-                    requirement_violated = True
                 _next_obs, reward, done, info = env.step(executed)
+                for name, entry in info["statuses"].items():
+                    checks[name] = checks.get(name, 0) + entry.get("checks", 1)
+                    if not entry["status"]:
+                        failed_properties.add(name)
+                error_episode |= info.get("outcome") == "ERROR"
                 counts["steps"] += 1
                 last_reward = float(reward)
 
             counts["episodes"] += 1
-            if requirement_violated:
+            counts["evaluation_errors"] += int(error_episode)
+            if failed_properties:
                 counts["safety_violations"] += 1
+            for name in failed_properties:
+                failures[name] = failures.get(name, 0) + 1
+            if error_episode or initial.outcome == "violation":
+                continue
             if last_reward > 0:
                 counts["successes"] += 1
             elif last_reward == 0:
@@ -98,9 +121,13 @@ def evaluate(model_path: Path, episodes: int, seed: int, dt: float,
     return {
         **base,
         **counts,
+        "execution_errors": execution_errors,
+        "requirement_checks": checks,
+        "requirement_violation_episodes": failures,
         "status": "evaluated",
         "success_rate": counts["successes"] / episode_count,
         "safety_violation_rate": counts["safety_violations"] / episode_count,
+        "evaluation_error_rate": counts["evaluation_errors"] / episode_count,
         "truncation_rate": counts["truncations"] / episode_count,
         "override_rate": counts["overrides"] / step_count,
         "pointwise_agreement": 1.0 - counts["pointwise_failures"] / check_count,

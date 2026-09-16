@@ -296,10 +296,12 @@ def analyze_model(
     ]
     if blockers:
         return {
-            "schema_version": 3,
+            "schema_version": 5,
             "result": "NOT_CERTIFIED",
-            "claim": "full_sysml_discretization_safety_preservation_v3",
+            "claim": "full_sysml_discretization_safety_preservation_v5",
             "timing": timing,
+            "value_semantics": model.value_semantics,
+            "execution": model.execution,
             "continuous_rate_assignments": continuous_records,
             "properties": [],
             "blocking_diagnostics": blockers,
@@ -324,10 +326,12 @@ def analyze_model(
         ]
     except ProofDeferred as exc:
         return {
-            "schema_version": 3,
+            "schema_version": 5,
             "result": "NOT_CERTIFIED",
-            "claim": "full_sysml_discretization_safety_preservation_v3",
+            "claim": "full_sysml_discretization_safety_preservation_v5",
             "timing": timing,
+            "value_semantics": model.value_semantics,
+            "execution": model.execution,
             "continuous_rate_assignments": continuous_records,
             "properties": [],
             "blocking_diagnostics": [f"{exc.reason_code}: {exc.detail}"],
@@ -336,7 +340,7 @@ def analyze_model(
     properties: list[dict[str, Any]] = []
     shared_reachability_cache = SharedReachabilityCache()
     for target, equation in sorted(model.requirements.items()):
-        if equation.source not in {"Prohibition", "Obligation"}:
+        if not set(equation.source.split(",")) & {"Prohibition", "Obligation"}:
             continue
         property_id = target.removeprefix("status.")
         dependencies = equation_refs(model, equation)
@@ -362,7 +366,7 @@ def analyze_model(
                 "source": equation.pretty(),
                 "dependencies": sorted(dependencies),
                 "reduction": {
-                    "kind": "full_sysml_interval_reduction_v3",
+                    "kind": "full_sysml_interval_reduction_v4",
                     "outcome": "DEFERRED",
                     "reason_code": exc.reason_code,
                     "detail": exc.detail,
@@ -721,15 +725,17 @@ def analyze_model(
     else:
         result = "NOT_CERTIFIED"
     return {
-        "schema_version": 3,
+        "schema_version": 5,
         "result": result,
-        "claim": "full_sysml_discretization_safety_preservation_v3",
+        "claim": "full_sysml_discretization_safety_preservation_v5",
         "claim_scope": (
             "For the complete SysML physical process from each shielded controller "
             "update through every time in the following fixed dt interval, for every "
             "parsed #Prohibition and #Obligation."
         ),
         "timing": timing,
+        "value_semantics": model.value_semantics,
+            "execution": model.execution,
         "continuous_rate_semantics": (
             "#ContinuousRate marks x := x + rate * dt as a rate held over the "
             "following physical interval, with the selected controller action held "

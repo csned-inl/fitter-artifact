@@ -103,9 +103,9 @@ def build_certificate(
     )
     if input_errors:
         analysis = {
-            "schema_version": 3,
+            "schema_version": 5,
             "result": "NOT_CERTIFIED",
-            "claim": "full_sysml_discretization_safety_preservation_v3",
+            "claim": "full_sysml_discretization_safety_preservation_v5",
             "properties": [],
             "blocking_diagnostics": input_errors,
         }
@@ -119,17 +119,16 @@ def build_certificate(
         )
         analysis = compact_analysis(analysis)
 
+    from .verification.preservation import required_preservation_inventory
     certificate: dict[str, Any] = {
+        'preservation': {'inventory': required_preservation_inventory(model), 'evidence': {}},
         "schema_version": SCHEMA_VERSION,
+        "execution": mdp_certificate.get("execution"),
         "kind": CERTIFICATE_KIND,
-        "result": analysis.get("result", "NOT_CERTIFIED"),
+        "result": "VIOLATION" if analysis.get("result") == "VIOLATION" else "NOT_CERTIFIED",
         "claim": {
-            "name": "full_sysml_discretization_safety_preservation_v3",
-            "status": (
-                "discharged"
-                if analysis.get("result") == "CERTIFIED"
-                else "not_discharged"
-            ),
+            "name": "full_sysml_discretization_safety_preservation_v5",
+            "status": "not_discharged",
         },
         "model": {
             "path": str(model),
