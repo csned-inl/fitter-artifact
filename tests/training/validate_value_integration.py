@@ -55,9 +55,33 @@ class IntegrationTests(unittest.TestCase):
         text = next(row[3] for row in part.requirements if 'NeuralRequirement' in row[4])
         shield = SpecShield(str(path))
         self.assertEqual(expression_record(shield.req_ast), expression_record(ExpressionParser(text).parse()))
-        # The literal source has an unconditional first conjunct; no action can
-        # satisfy it at target=0,current=10. Do not silently repair the contract.
-        self.assertEqual(shield.requirement_actions({'targetSpeed':0, 'currentSpeedMps':10, 'gapMeters':100}), [])
+        # Keep the old ambiguous expression as a negative control: the runtime
+        # must never reintroduce its former implicit parenthesis repair.
+        old_text = path.read_text().replace(
+            '((p.targetSpeed > p.currentSpeedMps + toleranceMps and p.gapMeters >= safeFollowingDistanceMeters) == p.applyThrottle)',
+            '(p.targetSpeed > p.currentSpeedMps + toleranceMps and p.gapMeters >= safeFollowingDistanceMeters == p.applyThrottle)')
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        old_path = Path(temporary.name) / 'model.sysml'; old_path.write_text(old_text)
+        old_shield = SpecShield(str(old_path))
+        self.assertEqual(old_shield.requirement_actions({'targetSpeed':0, 'currentSpeedMps':10, 'gapMeters':100}), [])
+
+    def test_cruise_source_contract_admits_expected_boundary_actions(self):
+        from clarity.runtime.shield import SpecShield
+        shield = SpecShield(str(Path(models_root()) / 'cruise-controller-model/model.sysml'))
+        for target, speed, gap, throttle, brake in (
+            (20, 10, 100, True, False),
+            (10, 20, 100, False, True),
+            (10, 10, 100, False, False),
+            (12, 10, 100, False, False),
+            (8, 10, 100, False, False),
+            (20, 10, 1, False, True),
+        ):
+            inputs = {'targetSpeed':target, 'currentSpeedMps':speed, 'gapMeters':gap}
+            actions = shield.requirement_actions(inputs)
+            with self.subTest(inputs=inputs):
+                self.assertEqual(len(actions), 1)
+                self.assertEqual(shield.action_map[actions[0]],
+                    {'applyThrottle':throttle, 'applyBrake':brake})
 
     def test_reject_partial_expression(self):
         for expr in ('(true', 'true junk', '1 +', '(1 < 2))'):
@@ -172,7 +196,39 @@ class IntegrationTests(unittest.TestCase):
         path = Path(models_root()) / 'mixing-sysml-model/model.sysml'
         parser = SysMLParser(str(path)); parser.parse()
         codes = [d['code'] for d in build_execution_description(parser).diagnostics]
+        self.assertNotIn('source_assignment_type', codes)
+        self.assertNotIn('integer_continuous_state', codes)
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        invalid = Path(temporary.name) / 'model.sysml'
+        invalid.write_text(path.read_text().replace('currentLevelMl : Real;', 'currentLevelMl : Integer;'))
+        parser = SysMLParser(str(invalid)); parser.parse()
+        codes = [d['code'] for d in build_execution_description(parser).diagnostics]
         self.assertEqual(codes.count('integer_continuous_state'), 3)
+
+    def test_fractional_volume_reaches_controller_without_integer_conversion(self):
+        path = Path(models_root()) / 'mixing-sysml-model/model.sysml'
+        # A unit-test timestep that makes the source's flow increments fractional.
+        # Full artifact and saved-checkpoint evaluations keep their original dt.
+        env = SysMLEnv(str(path), dt=.037, phase=1, observation_scale=150)
+        self.addCleanup(env.close)
+        initial = env.reset_with_result(seed=123)
+        self.assertEqual(initial.outcome, 'decision')
+        _, _, _, info = env.step(15)
+        self.assertNotEqual(info['outcome'], 'ERROR')
+        inputs = env.model_inputs
+        self.assertNotEqual(inputs['tank1VolumeMl'], int(inputs['tank1VolumeMl']))
+        self.assertEqual(inputs['tank1VolumeMl'], env._twin.engine.state['system::controller::volume1Res::response'])
+        self.assertEqual(inputs['tank1VolumeMl'], env._twin.engine.state['system::controller::observedLevel1'])
+
+    def test_approved_source_edits_preserve_all_safety_expressions(self):
+        from clarity.certification.ordered_execution import source_requirement_inventory
+        expected = json.loads((FIXTURE.parent / 'bundled-safety-expressions.json').read_text())
+        for model, records in expected.items():
+            parser = SysMLParser(str(Path(models_root()) / model / 'model.sysml')); parser.parse()
+            actual = [{k:v for k,v in row.items() if k in
+                ('name','tags','subject','subject_type','expression_text')}
+                for row in source_requirement_inventory(parser)]
+            self.assertEqual(actual, records)
 
     def test_12_original_properties_inventory(self):
         count = 0

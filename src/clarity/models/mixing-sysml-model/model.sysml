@@ -36,7 +36,7 @@ package TankFillingSystem {
     }
 
     item def ReadInputRegisterRespMsg :> ModbusResMsg {
-        attribute response : Integer;
+        attribute response : Real;
     }
 
     item def ExceptionResMsg :> ModbusResMsg;
@@ -48,7 +48,7 @@ package TankFillingSystem {
     }
 
     item def VolumeReading {
-        attribute volumeMl : Integer;
+        attribute volumeMl : Real;
     }
 
     // A port to connect the volume sensor to a tank.
@@ -109,7 +109,7 @@ package TankFillingSystem {
         port volumeSensorPort : ~VolumeSensorToTankPort;
 
         attribute capacityMl : Integer;
-        attribute currentLevelMl : Integer;
+        attribute currentLevelMl : Real;
         attribute isFull : Boolean = currentLevelMl >= capacityMl;
         attribute isEmpty : Boolean = currentLevelMl <= 0;
 
@@ -232,8 +232,8 @@ package TankFillingSystem {
         attribute toleranceMl : Integer = 2;
 
         // Last observed sensor readings (updated each scan cycle).
-        attribute observedLevel1 : Integer := 0;
-        attribute observedLevel2 : Integer := 0;
+        attribute observedLevel1 : Real := 0;
+        attribute observedLevel2 : Real := 0;
 
         // Scan frequency.
         attribute scanCycleFrequencyHz : Integer = 10;
@@ -338,8 +338,8 @@ package TankFillingSystem {
         }
 
         #Neural action def Policy {
-            in tank1VolumeMl : Integer;
-            in tank2VolumeMl : Integer;
+            in tank1VolumeMl : Real;
+            in tank2VolumeMl : Real;
             in tank1TargetTransferMl : Integer;
             in tank2TargetTransferMl : Integer;
             in tank1OriginalMl : Integer;

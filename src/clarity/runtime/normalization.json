@@ -28,6 +28,22 @@
       "scale": 1.0,
       "source_path": "tests/discretization/fixtures/held_constant.sysml",
       "provenance": "constant-one test fixture"
+    },
+    {
+      "source_sha256": "c4576a6ce0a9de241c7cf0231149b69da87f4a6af0844f27c83394ba0cebb850",
+      "dt": 0.1,
+      "scale": 102.0,
+      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
+      "provenance": "approved source correction; same observation layout and pre-integration scale",
+      "previous_source_sha256": "0edcd8b89f1cf5b79d06b3fda3d4652da4337dad045e133ccab7bf1f63f757aa"
+    },
+    {
+      "source_sha256": "e8217dffa82f32e275b52efe5559fee6b01de465859db857aa9350e994cf3f24",
+      "dt": 0.1,
+      "scale": 150.0,
+      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
+      "provenance": "approved source correction; same observation layout and pre-integration scale",
+      "previous_source_sha256": "b6cb079e68e0c8453f16e83d9510d715651f54b62249d8b9253fc131675a7a5b"
     }
   ]
 }

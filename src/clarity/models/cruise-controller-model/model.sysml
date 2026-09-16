@@ -144,8 +144,8 @@ package CruiseControl {
         #NeuralRequirement requirement def 'Neural Controller Soundness' {
             subject p : Policy;
             require constraint {
-                (p.targetSpeed > p.currentSpeedMps + toleranceMps and p.gapMeters >= safeFollowingDistanceMeters == p.applyThrottle) and
-                (p.targetSpeed < p.currentSpeedMps - toleranceMps or p.gapMeters < safeFollowingDistanceMeters == p.applyBrake) and
+                ((p.targetSpeed > p.currentSpeedMps + toleranceMps and p.gapMeters >= safeFollowingDistanceMeters) == p.applyThrottle) and
+                ((p.targetSpeed < p.currentSpeedMps - toleranceMps or p.gapMeters < safeFollowingDistanceMeters) == p.applyBrake) and
                 (not (p.applyThrottle and p.applyBrake))
             }
         }

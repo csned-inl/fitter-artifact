@@ -25,20 +25,22 @@ and the [SysML reference expression grammar, `ImpliesExpression`, `AndExpression
 The former specifies precedence; the latter explicitly constructs left-associated
 implication chains. Neither source authorizes CLARITY's former heuristic regrouping.
 
-## Concrete source issues requiring decisions
+## Approved source corrections and remaining runtime failure
 
-1. **Cruise controller contract.** Its first conjunct is literally
-   `target > speed + tolerance and (gap >= safe == throttle)`.
-   If `target > speed + tolerance` is false, no action satisfies the contract.
-   The removed shield heuristic instead used
-   `(target > speed + tolerance and gap >= safe) == throttle`, changing the
-   source meaning. A proposed two-line source-parentheses correction is saved
-   with the integration evidence, but has not been applied without approval.
-2. **Mixing numeric domain.** `currentLevelMl` and corresponding message/reading
-   fields are Integer; `#ContinuousRate` assigns a Real expression using `dt`.
-   Continuous movement also passes through fractional volumes. No implicit
-   Integer-to-Real source-domain change is certified. Approval for explicit
-   volume type changes is pending.
+The user approved the two proposed source corrections on 2026-09-16. Git
+checkpoint `e7aa3ce` preserves the complete implementation before these edits.
+
+1. **Cruise controller contract — corrected.** The source now explicitly uses
+   `(target > speed + tolerance and gap >= safe) == throttle` and the corresponding
+   parenthesized brake condition. The shield evaluates that literal expression;
+   it does not repair precedence internally. The five safety requirement
+   expressions are unchanged.
+2. **Mixing numeric domain — corrected.** Physical tank levels, volume-reading
+   payloads, Modbus volume responses, stored observations, and the two current
+   volume policy inputs now declare Real. Integer addresses, initial scenario
+   values and transfer targets remain Integer. This explicitly permits fractional
+   values along the volume path; it does not establish the missing numeric or
+   continuous-flow proof. All four safety requirement expressions are unchanged.
 3. **Mixing requirement during initialization.** With reference-grammar
    implication grouping, `Fluid Transfer Liveness` becomes false while the
    first scan is being initialized. The source updates its scan timestamp before
