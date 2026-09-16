@@ -16,7 +16,7 @@ models remain uncertified. Passing regression tests is not a safety theorem.
 | Action bodies | Ordered AST of assignments, branches, performed actions and calls | Both branches and per-event read/write identities retained. This is an inventory; decision composition and its independent proof are not implemented. |
 | Runtime initialization | Scenario draw precedes any source advancement | Existing distribution and 5 mL reserve retained. No inactive reset controls. Initial failures remain in evaluation denominators. |
 | Runtime outcomes | Structured reset/advance result | Decision, completion and execution error wake the caller; no invented action/observation on an error. Completion is the environment's `#Completion` boundary, not proof that physics stops. |
-| Requirement accounting | Original AST at initialization, assignments, accepts, decisions and cycle ends | Every false result/error persists in a monotonic event ledger. These observations do not prove coverage of all source-permitted executions or continuous interiors. |
+| Requirement accounting | Original AST at completed initialization, decisions/terminal returns and completed cycles | Assignment and message-accept hooks are removed. False results/errors at retained observations persist in the event ledger. Continuous-interval obligations remain in Stage 4. |
 | Encoding | Fixed source/dt-indexed normalization record; actual float32 output | Existing scales preserved without executing controls during construction. Float32 injectivity and equality of deployed transition laws are unproved. |
 | Proof artifacts | Markov 4 / reduced spec 3 / discretization 5 / verification report 2 | Source inventories, types, equations and interfaces checked; old artifacts reject. Arithmetic predicate subproofs cannot authorize full source preservation. |
 
@@ -41,12 +41,11 @@ checkpoint `e7aa3ce` preserves the complete implementation before these edits.
    values and transfer targets remain Integer. This explicitly permits fractional
    values along the volume path; it does not establish the missing numeric or
    continuous-flow proof. All four safety requirement expressions are unchanged.
-3. **Mixing requirement during initialization.** With reference-grammar
-   implication grouping, `Fluid Transfer Liveness` becomes false while the
-   first scan is being initialized. The source updates its scan timestamp before
-   accepting its two readings and applying the actuator outputs. The ledger
-   retains this result; it does not infer atomic scan behavior from the prose
-   comment about the next scan cycle.
+3. **Mixing requirement checking.** Requirements are no longer evaluated after
+   each timestamp assignment, other individual assignment, or message accept.
+   Initialization, decision/terminal-return and completed-cycle observations
+   remain. The implication parser and the source Liveness expression are
+   unchanged by this removal; evaluation results refer to those retained points.
 
 ## Unresolved proof obligations
 

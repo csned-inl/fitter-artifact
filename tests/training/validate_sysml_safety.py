@@ -137,7 +137,7 @@ def check_reserve() -> dict:
     return {'scenarios': 200, 'tank_reserve_checks': 400}
 
 
-def check_transient_and_terminal_results() -> dict:
+def check_boundary_and_terminal_results() -> dict:
     class Composite:
         policy = SimpleNamespace(initial_hidden=lambda n: np.zeros((n, 1)))
         def act(self, *args, **kw):
@@ -152,7 +152,7 @@ def check_transient_and_terminal_results() -> dict:
         def step(self, action):
             self.index += 1
             return np.zeros(1), float(self.index == 2), self.index == 2, {
-                'requirement_events': (RequirementEvent(1, self.index, 'assignment', '', self.index,
+                'requirement_events': (RequirementEvent(1, self.index, 'cycle_end', '', self.index,
                     {'Unlisted safety property': {'status': self.index == 2, 'kind': 'Obligation', 'error':None}}),),
                 'outcome': 'SUCCESS' if self.index == 2 else 'RUNNING'}
     ep = collect_episode(Env(), Composite())
@@ -162,7 +162,7 @@ def check_transient_and_terminal_results() -> dict:
     env = object.__new__(SysMLEnv); env.phase = 2; env._completion_key = 'done'
     statuses = {'Any source name': {'kind': 'Obligation', 'status': False}}
     assert env._compute_reward({'done': True}, statuses) == (-1., True)
-    return {'transient_failure_preserved': True, 'completion_cannot_mask_failure': True}
+    return {'boundary_failure_preserved': True, 'completion_cannot_mask_failure': True}
 
 
 
@@ -205,7 +205,7 @@ def validate(out_dir: Path) -> dict:
               'source_requirements': check_source_requirements(out_dir),
               'invalid_requirements': check_invalid_requirements(out_dir),
               'reserve': check_reserve(),
-              'transient_and_terminal': check_transient_and_terminal_results()}
+              'boundary_and_terminal': check_boundary_and_terminal_results()}
     (out_dir/'sysml_safety_validation.json').write_text(json.dumps(result, indent=2)+'\n')
     return result
 

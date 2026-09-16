@@ -38,6 +38,22 @@ from validation_common import (
 
 
 def validate_proof_rules() -> None:
+    interval_time = Var(INTERVAL_TIME)
+    interval_domain = [Op('>=', (interval_time, Const(0))),
+                       Op('<=', (interval_time, Const(1)))]
+    safe_interval = Op('and', tuple(interval_domain))
+    unsafe_interior = Op('or', (
+        Op('<=', (interval_time, Const('1/4'))),
+        Op('>=', (interval_time, Const('3/4'))),
+    ))
+    require(prove_implication_exact(interval_domain, safe_interval, set()).get('proved') is True,
+            'valid whole-interval control did not prove')
+    require(prove_implication_exact(interval_domain, unsafe_interior, set()).get('proved') is False,
+            'safe endpoints concealed an unsafe interval interior')
+    serialized = expr_to_dict(unsafe_interior)
+    for time, expected in [('0', True), ('1', True), ('1/2', False)]:
+        require(replay_serialized_boolean_expression(serialized, {INTERVAL_TIME: time}) is expected,
+                f'interval control has the wrong value at {time}')
     x = Var("x")
     sound = prove_implication_exact(
         [Op("<=", (x, Const(0)))],

@@ -13,7 +13,7 @@ from clarity.models import models_root
 from clarity.sysml.parser import ExpressionParser, SysMLParser
 from clarity.sysml.simulator import ExpressionEvaluator, SimulationEngine
 from clarity.runtime.env import SysMLEnv
-from clarity.runtime.requirements import RequirementEvent, summarize_events, ResetUnavailable
+from clarity.runtime.requirements import RequirementEvent, RequirementLedger, summarize_events, ResetUnavailable
 from clarity.certification.ordered_execution import build_execution_description, validate_execution_description
 from clarity.certification.equations import EquationModel, Equation, Var, Const, Op
 from clarity.certification.solver import infer_sorts, one_step_transition_closure
@@ -190,7 +190,11 @@ class IntegrationTests(unittest.TestCase):
         env = SysMLEnv(str(path), dt=.1, phase=1); self.addCleanup(env.close)
         initial = env.reset_with_result(seed=123)
         self.assertEqual(initial.outcome, 'decision')
-        self.assertIn('Fluid Transfer Liveness', initial.violations)
+        self.assertEqual([event.boundary for event in initial.events],
+                         ['initialization', 'decision'])
+        current = env._twin.engine.requirement_statuses()
+        self.assertEqual(initial.events[-1].statuses['Fluid Transfer Liveness']['status'],
+                         current['Fluid Transfer Liveness']['status'])
         inputs = env.model_inputs
         self.assertEqual(inputs['tank1VolumeMl'], inputs['tank1OriginalMl'])
         self.assertEqual(inputs['tank2VolumeMl'], inputs['tank2OriginalMl'])
@@ -198,7 +202,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_failure_cannot_be_overwritten_by_later_true(self):
         def event(i, value):
-            return RequirementEvent(1, i, 'assignment', '', 0,
+            return RequirementEvent(1, i, 'cycle_end', '', i * .1,
                 {'P': {'kind':'Prohibition', 'status':value, 'error':None}})
         events = (event(0, True), event(1, False), event(2, True))
         self.assertIs(summarize_events(events)['P']['status'], False)
@@ -349,7 +353,7 @@ class IntegrationTests(unittest.TestCase):
         np.testing.assert_array_equal(data[0][0], data[1][0])
         np.testing.assert_array_equal(data[0][1], data[1][1])
 
-    def test_recurrent_oracle_retains_initial_and_intermediate_failures(self):
+    def test_recurrent_oracle_retains_boundary_failures(self):
         from clarity.training.recurrent.oracle_data import generate_oracle_data
         path = self.source(lambda s: s.replace(
             's.controller.sampled < 0.0 implies s.controller.active',
@@ -361,6 +365,52 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('Respond to negative reading', report['violations'])
         self.assertGreater(report['checks']['Respond to negative reading'], 1)
         self.assertEqual(report['actions'], 2)
+
+    def test_partial_assignments_do_not_reject_but_boundary_failures_do(self):
+        for complete in (True, False):
+            with self.subTest(complete_update=complete):
+                def change(text):
+                    text = text.replace('attribute physical : Real := 1.0;',
+                        'attribute physical : Real := 1.0;\n'
+                        'attribute first : Real := 0.0;\n'
+                        'attribute second : Real := 0.0;')
+                    text = text.replace('assign sampled := physical;',
+                        'assign sampled := physical;\nassign first := first + 1.0;\n'
+                        'assign second := ' + ('first' if complete else 'second') + ';')
+                    return text.replace('s.controller.sampled < 0.0 implies s.controller.active',
+                                        's.controller.first == s.controller.second')
+                env = self.env(self.source(change), phase=2)
+                result = env.reset_with_result(seed=7)
+                self.assertEqual([e.boundary for e in result.events],
+                                 ['initialization', 'decision'])
+                self.assertEqual(env._twin.engine.state['system::controller::first'], 1)
+                self.assertEqual(env._twin.engine.state['system::controller::second'], int(complete))
+                self.assertEqual(result.outcome, 'decision' if complete else 'violation')
+                self.assertEqual(bool(result.violations), not complete)
+                if complete:
+                    _, reward, done, info = env.step(0)
+                    self.assertEqual(reward, -.01)
+                    self.assertFalse(done)
+                    self.assertEqual([e.boundary for e in info['requirement_events']],
+                                     ['cycle_end', 'decision'])
+                    self.assertTrue(all(row['status'] for row in info['statuses'].values()))
+
+    def test_accept_copies_payload_without_requirement_event(self):
+        from clarity.sysml.parser import AcceptStmt
+        parser = SysMLParser(str(FIXTURE)); parser.parse()
+        engine = SimulationEngine(parser); engine.initialize()
+        engine.requirement_ledger = RequirementLedger()
+        port = 'system::controller::input'
+        engine.port_mailboxes[port] = [{'type': 'Msg', 'attrs': {'response': 3.0}}]
+        engine._execute_action_stmts([AcceptStmt('packet', 'Msg', 'input')],
+                                     'system::controller', {})
+        self.assertEqual(engine.state['system::controller::packet::response'], 3.0)
+        self.assertEqual(engine.port_mailboxes[port], [])
+        self.assertEqual(engine.requirement_ledger.drain(), ())
+        engine.record_requirements('cycle_end')
+        events = engine.requirement_ledger.drain()
+        self.assertEqual([e.boundary for e in events], ['cycle_end'])
+        self.assertIn('Respond to negative reading', events[0].statuses)
 
     def test_smt_text_is_bound_to_the_expression(self):
         from clarity.discretization.certificates.verification.reachability import _recheck_smt_no_solution

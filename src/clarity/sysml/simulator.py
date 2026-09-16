@@ -792,7 +792,6 @@ class SimulationEngine:
                             for attr_path, val in item.get('attrs', {}).items():
                                 state_key = f"{context}::{stmt.var_name}::{attr_path.replace('.', '::')}"
                                 self.state[state_key] = val
-                        self.record_requirements("accept", port_key)
                         mailbox.pop(i)
                         break
                 else:
@@ -861,7 +860,6 @@ class SimulationEngine:
                 or isinstance(self.state.get(key), BoundExpression)):
             raise ValueError(f"assignment to bound feature {key}")
         self.state[key] = value
-        self.record_requirements("assignment", key)
 
     def _apply_step_actions(self, dt: float) -> None:
         """Evaluate and apply all owned step actions for one timestep."""

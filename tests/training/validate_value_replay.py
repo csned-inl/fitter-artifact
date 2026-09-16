@@ -1,4 +1,4 @@
-"""Replay every saved test episode; record original requirements at both boundaries.
+"""Replay every saved test episode at initialization, decisions and cycle ends.
 
 This evaluates existing weights. It does not authorize a certificate or training.
 The saved episode count, seeds, dimensions, buffers, and dt are preserved.
@@ -47,6 +47,7 @@ def replay(saved_root: Path, output: Path):
         path = Path(models_root()) / Path(saved["model_path"]).parent.name / "model.sysml"
         label = folder.parent.parent.name
         counts = collections.Counter()
+        boundaries = collections.Counter()
         failed = {"reset": set(), "episode": set()}
         phase = {"enabled": False, "episode": -1, "phase": "construction"}
         rows = []
@@ -86,6 +87,10 @@ def replay(saved_root: Path, output: Path):
                     "evaluation_errors": errors, "state_values": values}) + "\n")
 
             def record(engine, boundary, source=""):
+                if boundary not in {'initialization', 'decision', 'cycle_end'}:
+                    raise AssertionError(f'unexpected internal requirement check: {boundary}')
+                if phase['enabled']:
+                    boundaries[boundary] += 1
                 original_record(engine, boundary, source)
                 inspect(engine, boundary + (":" + source if source else ""))
 
@@ -151,6 +156,7 @@ def replay(saved_root: Path, output: Path):
             "evaluation_errors": counts["evaluation_errors"],
             "episodes_with_errors": sum(bool(r["errors"]) for r in rows),
             "accounting_mismatches": [r["index"] for r in rows if r["reported_failures"] != r["observed_failures"]],
+            "boundary_counts": dict(boundaries),
             "counts": dict(counts), "episodes_detail": rows}
         (output / f"{label}.json").write_text(json.dumps(result, indent=2) + "\n")
         results.append({k: v for k, v in result.items() if k not in {"counts", "episodes_detail"}})
