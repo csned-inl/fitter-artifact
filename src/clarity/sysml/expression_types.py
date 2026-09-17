@@ -2,9 +2,30 @@
 
 from __future__ import annotations
 
-from .parser import BinaryExpr, LiteralExpr, RefExpr, TernaryExpr, UnaryExpr
+from .parser import BinaryExpr, LiteralExpr, RefExpr, TernaryExpr, UnaryExpr, ExpressionParser
 
 NUMERIC = {"Integer", "Real"}
+
+
+def parse_checked_expression(text):
+    """Validate complete input while retaining the original parser's grouping."""
+    import re
+    depth = 0
+    for token in re.findall(r"'[^']*'|\"[^\"]*\"|[()]", text):
+        if token == '(':
+            depth += 1
+        elif token == ')':
+            depth -= 1
+        if depth < 0:
+            raise ValueError('unmatched expression parenthesis')
+    if depth:
+        raise ValueError('unclosed expression parenthesis')
+    parser = ExpressionParser(text)
+    expression = parser.parse()
+    if parser.text[parser.pos:].strip():
+        raise ValueError(f'unparsed expression: {parser.text[parser.pos:]}')
+    expression_type(expression)
+    return expression
 
 
 def expression_type(expr, references=None):

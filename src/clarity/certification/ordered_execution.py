@@ -12,9 +12,10 @@ import re
 from pathlib import Path
 
 from clarity.sysml import parser as ast
-from clarity.sysml.expression_types import expression_type
+from clarity.sysml.expression_types import expression_type, parse_checked_expression
+from clarity.sysml.parser_values import assigned_features, initialization_values
 
-VERSION = 1
+VERSION = 2
 SAFETY_TAGS = {'Prohibition', 'Obligation'}
 
 
@@ -25,7 +26,7 @@ def fingerprint(value):
 
 def expression_record(expr):
     if isinstance(expr, ast.LiteralExpr):
-        return {'kind': 'literal', 'value': expr.value, 'lexeme': expr.lexeme,
+        return {'kind': 'literal', 'value': expr.value,
                 'type': expression_type(expr)}
     if isinstance(expr, ast.RefExpr):
         return {'kind': 'reference', 'path': list(expr.path)}
@@ -63,7 +64,7 @@ def source_requirement_inventory(parser):
                         'source_start': match.start(), 'source_end': end,
                         'subject': subject[1], 'subject_type': subject[2],
                         'expression_text': expr.strip(),
-                        'expression': expression_record(ast.ExpressionParser(expr).parse())})
+                        'expression': expression_record(parse_checked_expression(expr))})
     expected = {r['name']: r for r in records}
     if len(expected) != len(records):
         raise ValueError('duplicate source safety identity')
@@ -228,7 +229,7 @@ def build_execution_description(parser):
                         'outputs': {p.name: p.type_name for p in definition.out_params},
                         'action_convention': 'executed'}
             elif isinstance(stmt, ast.AttributeDeclStmt):
-                data = {'name': stmt.name, 'type': stmt.type_name, 'value_kind': stmt.value_kind,
+                data = {'name': stmt.name, 'type': stmt.type_name, 'evaluation': 'at_declaration',
                         'expression': None if stmt.init_expr is None else expression_record(stmt.init_expr)}
             elif isinstance(stmt, (ast.ItemDeclStmt, ast.InParamStmt, ast.OutParamStmt)):
                 data = {'name': stmt.name, 'type': stmt.type_name}
@@ -250,10 +251,12 @@ def build_execution_description(parser):
                 'events': tuple(asdict(e) for e in lower(context, transition.do_action or [],
                                                         context + '/state_machine/' + transition.name))})
     initial = [{'target': a.qualified_name, 'kind': 'initial', 'expression': expression_record(a.expression)}
-               for a in parser.initial_attributes]
+               for a in initialization_values(parser)]
     initial += [{'target': a.qualified_name, 'kind': 'binding', 'expression': expression_record(a.expression)}
                 for a in parser.derived_attributes]
-    initial += [{'target': p.qualified_name, 'kind': p.value_kind, 'value': p.value,
+    assigned = assigned_features(parser)
+    initial += [{'target': p.qualified_name,
+                 'kind': 'initial' if p.qualified_name in assigned else 'parameter', 'value': p.value,
                  'metadata': list(p.metadata)} for p in parser.parameters]
     return ExecutionInventory(hashlib.sha256(Path(parser.file_path).read_bytes()).hexdigest(),
                               tuple(programs), tuple(initial), tuple(properties), types, tuple(diagnostics))

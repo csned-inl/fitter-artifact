@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from clarity.sysml.parser import AcceptStmt, AssignStmt, IfStmt, ItemDeclStmt, PerformStmt
 from .equations import Equation, Var
+from clarity.sysml.parser_values import assigned_features, initialization_values
 
 
 def walk_actions(parser, context, statements, active=()):
@@ -127,13 +128,14 @@ def finish_value_semantics(extractor):
 
     declarations = []
     for kind, values in (("binding", parser.derived_attributes),
-                         ("initial", parser.initial_attributes)):
+                         ("initial", initialization_values(parser))):
         for attr in values:
             declarations.append({"name": attr.qualified_name, "kind": kind,
                                  "expression": repr(attr.expression)})
+    assigned = assigned_features(parser)
     for parameter in parser.parameters:
         declarations.append({"name": parameter.qualified_name,
-                             "kind": parameter.value_kind,
+                             "kind": "initial" if parameter.qualified_name in assigned else "parameter",
                              "expression": repr(parameter.value)})
     model.value_semantics = {
         "version": 1,

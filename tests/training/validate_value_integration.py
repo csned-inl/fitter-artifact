@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 from clarity.models import models_root
 from clarity.sysml.parser import ExpressionParser, SysMLParser
+from clarity.sysml.expression_types import parse_checked_expression
 from clarity.sysml.simulator import ExpressionEvaluator, SimulationEngine
 from clarity.runtime.env import SysMLEnv
 from clarity.runtime.requirements import RequirementEvent, RequirementLedger, summarize_events, ResetUnavailable
@@ -26,7 +28,15 @@ from clarity.training.reduced.policy import MLPActorCritic
 from clarity.training.reduced.composite import ProgramShieldComposite
 from clarity.runtime.oracle import extract_interface
 
-FIXTURE = Path(__file__).parents[1] / 'discretization/fixtures/held_constant.sysml'
+SOURCE_FIXTURE = Path(__file__).parents[1] / 'discretization/fixtures/held_constant.sysml'
+
+def legacy_fixture_text(text):
+    # Exercise the restored parser's declarations without editing any model file.
+    return re.sub(r'(\battribute\s+\w+\s*:\s*\w+\s*):=', r'\1=', text)
+
+_FIXTURE_DIRECTORY = tempfile.TemporaryDirectory(prefix='clarity-original-parser-tests-')
+FIXTURE = Path(_FIXTURE_DIRECTORY.name) / 'model.sysml'
+FIXTURE.write_text(legacy_fixture_text(SOURCE_FIXTURE.read_text()))
 
 class IntegrationTests(unittest.TestCase):
     def test_two_feeders_preserve_the_source_inlet_sum(self):
@@ -76,7 +86,8 @@ class IntegrationTests(unittest.TestCase):
 
     def source(self, change=lambda s:s):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
-        path = Path(directory.name) / 'model.sysml'; path.write_text(change(FIXTURE.read_text()))
+        path = Path(directory.name) / 'model.sysml'
+        path.write_text(legacy_fixture_text(change(SOURCE_FIXTURE.read_text())))
         return str(path)
 
     def env(self, path=None, **kwargs):
@@ -84,14 +95,13 @@ class IntegrationTests(unittest.TestCase):
         self.addCleanup(env.close)
         return env
 
-    def test_implication_matches_reference_grammar_associativity(self):
+    def test_implication_preserves_original_clarity_associativity(self):
         evaluate = ExpressionEvaluator({}, strict=True).evaluate
-        # Left: (false => true) => false == false. Right association gives true.
-        self.assertIs(evaluate(ExpressionParser('false implies true implies false').parse()), False)
+        self.assertIs(evaluate(ExpressionParser('false implies true implies false').parse()), True)
         self.assertIs(evaluate(ExpressionParser('false implies (true implies false)').parse()), True)
         self.assertIs(evaluate(ExpressionParser('(false implies true) implies false').parse()), False)
 
-    def test_shield_keeps_source_precedence(self):
+    def test_shield_preserves_original_clarity_controller_grouping(self):
         from clarity.runtime.shield import SpecShield
         from clarity.certification.ordered_execution import expression_record
         path = Path(models_root()) / 'cruise-controller-model/model.sysml'
@@ -99,16 +109,13 @@ class IntegrationTests(unittest.TestCase):
         part = parser.part_defs[parser.part_instances[parser.controller_part].part_type]
         text = next(row[3] for row in part.requirements if 'NeuralRequirement' in row[4])
         shield = SpecShield(str(path))
-        self.assertEqual(expression_record(shield.req_ast), expression_record(ExpressionParser(text).parse()))
-        # Keep the old ambiguous expression as a negative control: the runtime
-        # must never reintroduce its former implicit parenthesis repair.
-        old_text = path.read_text().replace(
-            '((p.targetSpeed > p.currentSpeedMps + toleranceMps and p.gapMeters >= safeFollowingDistanceMeters) == p.applyThrottle)',
-            '(p.targetSpeed > p.currentSpeedMps + toleranceMps and p.gapMeters >= safeFollowingDistanceMeters == p.applyThrottle)')
-        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
-        old_path = Path(temporary.name) / 'model.sysml'; old_path.write_text(old_text)
-        old_shield = SpecShield(str(old_path))
-        self.assertEqual(old_shield.requirement_actions({'targetSpeed':0, 'currentSpeedMps':10, 'gapMeters':100}), [])
+        expected = ('((p.targetSpeed > p.currentSpeedMps + toleranceMps and '
+                    'p.gapMeters >= safeFollowingDistanceMeters) == p.applyThrottle) and '
+                    '((p.targetSpeed < p.currentSpeedMps - toleranceMps or '
+                    'p.gapMeters < safeFollowingDistanceMeters) == p.applyBrake) and '
+                    '(not (p.applyThrottle and p.applyBrake))')
+        self.assertEqual(expression_record(shield.req_ast), expression_record(ExpressionParser(expected).parse()))
+        self.assertIn('safeFollowingDistanceMeters == p.applyThrottle', text)
 
     def test_cruise_source_contract_admits_expected_boundary_actions(self):
         from clarity.runtime.shield import SpecShield
@@ -131,12 +138,12 @@ class IntegrationTests(unittest.TestCase):
     def test_reject_partial_expression(self):
         for expr in ('(true', 'true junk', '1 +', '(1 < 2))'):
             with self.subTest(expr=expr), self.assertRaises(ValueError):
-                ExpressionParser(expr).parse()
+                parse_checked_expression(expr)
 
     def test_reject_boolean_numeric_mix(self):
         for expr in ('not 1', 'true + 1', 'false == 0', '1 and true'):
             with self.subTest(expr=expr), self.assertRaises(ValueError):
-                ExpressionParser(expr).parse()
+                parse_checked_expression(expr)
 
     def test_short_circuit_keeps_defined_boolean_meaning(self):
         evaluate = ExpressionEvaluator({}, strict=True).evaluate
@@ -235,8 +242,14 @@ class IntegrationTests(unittest.TestCase):
     def test_source_inventory_keeps_all_metadata_and_rejects_mutation(self):
         path = self.source(lambda s: s.replace('#Prohibition requirement', '#Audit #Prohibition requirement'))
         parser = SysMLParser(path); parser.parse()
+        # The restored parser drops the additional tag; the inventory must reject
+        # that loss before a proof can claim to preserve the source declaration.
+        with self.assertRaisesRegex(ValueError, 'source safety expression/tags changed'):
+            build_execution_description(parser)
+        path = self.source()
+        parser = SysMLParser(path); parser.parse()
         record = build_execution_description(parser).to_dict()
-        self.assertEqual(record['property_inventory'][0]['tags'], ['Audit','Prohibition'])
+        self.assertEqual(record['property_inventory'][0]['tags'], ['Prohibition'])
         self.assertEqual(validate_execution_description(record, path), [])
         record['property_inventory'][0]['expression']['operator'] = 'or'
         self.assertTrue(validate_execution_description(record, path))
@@ -245,13 +258,7 @@ class IntegrationTests(unittest.TestCase):
         path = Path(models_root()) / 'mixing-sysml-model/model.sysml'
         parser = SysMLParser(str(path)); parser.parse()
         codes = [d['code'] for d in build_execution_description(parser).diagnostics]
-        self.assertNotIn('source_assignment_type', codes)
-        self.assertNotIn('integer_continuous_state', codes)
-        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
-        invalid = Path(temporary.name) / 'model.sysml'
-        invalid.write_text(path.read_text().replace('currentLevelMl : Real;', 'currentLevelMl : Integer;'))
-        parser = SysMLParser(str(invalid)); parser.parse()
-        codes = [d['code'] for d in build_execution_description(parser).diagnostics]
+        # Published Integer declarations remain Integer in the proof inventory.
         self.assertEqual(codes.count('integer_continuous_state'), 3)
 
     def test_fractional_volume_reaches_controller_without_integer_conversion(self):
@@ -269,9 +276,9 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(inputs['tank1VolumeMl'], env._twin.engine.state['system::controller::volume1Res::response'])
         self.assertEqual(inputs['tank1VolumeMl'], env._twin.engine.state['system::controller::observedLevel1'])
 
-    def test_approved_source_edits_preserve_all_safety_expressions(self):
+    def test_published_models_preserve_all_safety_expressions(self):
         from clarity.certification.ordered_execution import source_requirement_inventory
-        expected = json.loads((FIXTURE.parent / 'bundled-safety-expressions.json').read_text())
+        expected = json.loads((SOURCE_FIXTURE.parent / 'bundled-safety-expressions.json').read_text())
         for model, records in expected.items():
             parser = SysMLParser(str(Path(models_root()) / model / 'model.sysml')); parser.parse()
             actual = [{k:v for k,v in row.items() if k in

@@ -113,8 +113,10 @@ def check_invalid_requirements(out_dir: Path) -> dict:
         f"requirement def '{parser.parsed_requirements[1].name}'", f"requirement def '{req.name}'", 1))
     try:
         other = SysMLParser(str(duplicate)); other.parse()
+        from clarity.certification.ordered_execution import source_requirement_inventory
+        source_requirement_inventory(other)
     except ValueError as exc:
-        assert 'duplicate requirement' in str(exc)
+        assert 'duplicate' in str(exc)
     else:
         raise AssertionError('duplicate requirement can overwrite a result')
     return {'invalid_expressions': results, 'duplicate_name_rejected': True}

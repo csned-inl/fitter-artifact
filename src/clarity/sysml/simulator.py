@@ -467,6 +467,10 @@ class SimulationEngine:
         return result
 
     def initialize(self, overrides: dict[str, float] = None) -> None:
+        # The original parser may accept a prefix or omit a malformed property.
+        # Validate the complete source inventory before executing any model.
+        from clarity.certification.ordered_execution import source_requirement_inventory
+        source_requirement_inventory(self.parser)
         overrides = overrides or {}
 
         # Initialize state from parameters
@@ -532,7 +536,8 @@ class SimulationEngine:
                 attr.expression, attr.context, self.parser.ref_bindings,
                 self.parser.system_part,
             )
-        pending = list(self.parser.initial_attributes)
+        from clarity.sysml.parser_values import initialization_values
+        pending = initialization_values(self.parser)
         for attr in pending:
             self.state.pop(attr.qualified_name, None)
         while pending:
@@ -798,10 +803,7 @@ class SimulationEngine:
                     raise ValueError(f"blocked source accept: {port_key} expects {stmt.type_name}")
             elif isinstance(stmt, AttributeDeclStmt):
                 if stmt.init_expr:
-                    value = (BoundExpression(stmt.init_expr, context,
-                                            self.parser.ref_bindings, self.parser.system_part)
-                             if stmt.value_kind == "binding"
-                             else evaluator.evaluate(stmt.init_expr))
+                    value = evaluator.evaluate(stmt.init_expr)
                     if value is not None:
                         self.state[f"{context}::{stmt.name}"] = value
             elif isinstance(stmt, SubactionCallStmt):
@@ -856,8 +858,7 @@ class SimulationEngine:
 
     def _assign_value(self, key: str, value: Any) -> None:
         key = canonical_key(self.state, key)
-        if (key in self.parser.bound_value_keys
-                or isinstance(self.state.get(key), BoundExpression)):
+        if isinstance(self.state.get(key), BoundExpression):
             raise ValueError(f"assignment to bound feature {key}")
         self.state[key] = value
 

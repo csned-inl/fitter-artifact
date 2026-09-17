@@ -163,7 +163,7 @@ class CertificationExtractor:
             part_def = self.parser.part_defs.get(part_type or "")
             if part_def is None:
                 continue
-            for attribute, text in part_def.initial_attributes.items():
+            for attribute, text in part_def.derived_attributes.items():
                 target = self.legacy.canonical_name(
                     [attribute] if instance_name is None
                     else [instance_name, attribute]
@@ -185,8 +185,7 @@ class CertificationExtractor:
 
         for parameter in self.parser.parameters:
             target = self.legacy.canonical_name(parameter.qualified_name.split("::"))
-            if (target in self.model.state and parameter.value_kind == "initial"
-                    and "ScenarioInput" not in parameter.metadata):
+            if target in self.model.state and "ScenarioInput" not in parameter.metadata:
                 self.model.initial_values[target] = parameter.value
 
     def _inst_name(self, fqn: str) -> str:
