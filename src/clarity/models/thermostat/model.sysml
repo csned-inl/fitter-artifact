@@ -195,7 +195,7 @@ package Thermostat {
         connect controller.heaterControlPort to heater.cmdIn;
         connect thermometer.upstreamPort to controller.thermometerPort;
 
-        attribute currentTime : Real := 0;
+        attribute currentTime : Real = 0;
         attribute lastObservedTemperature : Real = thermometer.lastReadingCelcius;
 
         action step {
@@ -240,7 +240,7 @@ package Thermostat {
 
     part system : HeatingCoolingSystem {
         part :>> environment {
-            attribute :>> temperatureCelcius := 23.9;
+            attribute :>> temperatureCelcius = 23.9;
             attribute :>> volumeMetersCubed = 20;
             #ScenarioInput attribute :>> outsideTemperatureCelcius = 5.0;
             attribute :>> heatLossCoefficientWattsPerCelcius = 10.0;
