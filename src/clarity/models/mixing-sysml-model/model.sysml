@@ -567,9 +567,9 @@ package TankFillingSystem {
 
             require constraint {
                 (s.controller.lastScanTimeSeconds > 0) implies
-                ((s.controller.tank1OriginalLevelMl - s.controller.observedLevel1 >= s.controller.tank1TransferMl + s.controller.toleranceMl)
+                ((s.controller.tank1OriginalLevelMl - s.controller.observedLevel1 >= s.controller.tank1TransferMl)
                   implies not s.pump1.isRunning) and
-                ((s.controller.tank2OriginalLevelMl - s.controller.observedLevel2 >= s.controller.tank2TransferMl + s.controller.toleranceMl)
+                ((s.controller.tank2OriginalLevelMl - s.controller.observedLevel2 >= s.controller.tank2TransferMl)
                   implies not s.pump2.isRunning)
             }
         }
@@ -581,10 +581,10 @@ package TankFillingSystem {
 
             require constraint {
                 (s.controller.lastScanTimeSeconds > 0) implies
-                ((s.controller.tank1OriginalLevelMl - s.controller.observedLevel1 < s.controller.tank1TransferMl)
-                    implies (s.valve1.isOpen and s.pump1.isRunning) and
-                  (s.controller.tank2OriginalLevelMl - s.controller.observedLevel2 < s.controller.tank2TransferMl)
-                    implies (s.valve2.isOpen and s.pump2.isRunning))
+                (((s.controller.tank1OriginalLevelMl - s.controller.observedLevel1 < s.controller.tank1TransferMl)
+                    implies (s.valve1.isOpen and s.pump1.isRunning)) and
+                 ((s.controller.tank2OriginalLevelMl - s.controller.observedLevel2 < s.controller.tank2TransferMl)
+                    implies (s.valve2.isOpen and s.pump2.isRunning)))
             }
         }
     }
