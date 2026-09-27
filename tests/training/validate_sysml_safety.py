@@ -168,42 +168,69 @@ def check_boundary_and_terminal_results() -> dict:
 
 
 
-def check_original_dry_running_failure() -> dict:
-    """Negative control: restore the known unsafe request in this test only."""
+def check_dry_running_accounting() -> dict:
+    """Check normal shutdown and a deliberately faulty empty-tank response."""
     model = next(m for m in discover_sysml([], models_root=models_root()) if m.key == 'tank-filling-system')
-    env = BufferedDiscreteEnv(str(model.path), dt=.1, max_steps=100, phase=1, n_obs=0, n_act=0, observation_scale=1)
-    original_sample = env._sample_scenario
-    def unsafe_request():
-        scenario = original_sample()
-        for tank in [1, 2]:
-            original = scenario[f'system::controller::tank{tank}OriginalLevelMl']
-            assert original <= (50 if tank == 1 else 100)
-            scenario[f'system::controller::tank{tank}TransferMl'] = original
-        return scenario
-    env._sample_scenario = unsafe_request
-    # Fault-injection fixture uses phase 1 to retain the whole trace after the
-    # independently detected initialization failure; all failures still count.
-    iface = extract_interface(str(model.path))
-    policy = MLPActorCritic(env.obs_dim, env.n_actions, 4, seed=0)
-    composite = ProgramShieldComposite(policy, iface['spec_shield'], iface['obs_names'])
-    try:
-        episode = collect_episode(env, composite, greedy=True, reset_seed=1323514403)
-        actual = env._twin.engine.requirement_statuses()
-        assert actual['No Dry Running']['status'] is False
-        assert 'No Dry Running' in episode.violations
-        assert episode.safety_viol
-        summary = summarize_measurements(measure_episodes([episode]))
-        assert summary.safety_violation_rate == 1.0
-        assert summary.requirement_violation_episodes['No Dry Running'] == 1
-    finally:
-        env.close()
-    return {'original_specification_unchanged': True, 'No Dry Running': 'counted',
-            'environment_seed': 1323514403, 'safety_violation_rate': 1.0}
+    results = {}
+    for inject_fault in (False, True):
+        env = BufferedDiscreteEnv(str(model.path), dt=.1, max_steps=100, phase=1,
+                                  n_obs=0, n_act=0, observation_scale=1)
+        original_sample = env._sample_scenario
+        def full_transfer_request():
+            scenario = original_sample()
+            for tank in [1, 2]:
+                original = scenario[f'system::controller::tank{tank}OriginalLevelMl']
+                assert original <= (50 if tank == 1 else 100)
+                scenario[f'system::controller::tank{tank}TransferMl'] = original
+            return scenario
+        env._sample_scenario = full_transfer_request
+        original_step = env.step
+        injected = []
+        def step(action):
+            if inject_fault and env.model_inputs['done']:
+                assert any(env.model_inputs[f'tank{tank}VolumeMl'] <= 0 for tank in (1, 2))
+                # Test-only actuator fault after shielding: deliberately keep
+                # the pumps running when the sensor reports an empty tank.
+                action = next(a for a, outputs in env.action_map.items() if all(outputs.values()))
+                injected.append(action)
+            return original_step(action)
+        env.step = step
+        iface = extract_interface(str(model.path))
+        policy = MLPActorCritic(env.obs_dim, env.n_actions, 4, seed=0)
+        composite = ProgramShieldComposite(policy, iface['spec_shield'], iface['obs_names'])
+        try:
+            episode = collect_episode(env, composite, greedy=True, reset_seed=1323514403)
+            summary = summarize_measurements(measure_episodes([episode]))
+            assert episode.requirement_checks['No Dry Running'] > 0
+            assert not episode.evaluation_errors
+            if inject_fault:
+                assert len(injected) == 1
+                # Detection is asserted from accumulated episode accounting,
+                # not from an assumption that the final state remains unsafe.
+                assert 'No Dry Running' in episode.violations
+                assert episode.safety_viol
+                assert summary.safety_violation_rate == 1.0
+                assert summary.requirement_violation_episodes['No Dry Running'] == 1
+            else:
+                assert not injected
+                assert episode.outcome == 'SUCCESS'
+                assert not episode.violations
+                assert summary.safety_violation_rate == 0.0
+                for tank in (1, 2):
+                    assert not env._twin.engine.state[f'system::pump{tank}::isRunning']
+            results['faulty_response' if inject_fault else 'normal_shutdown'] = {
+                'safety_violation_rate': summary.safety_violation_rate,
+                'recorded_violations': episode.violations,
+                'faults_injected': len(injected),
+            }
+        finally:
+            env.close()
+    return {'environment_seed': 1323514403, **results}
 
 
 def validate(out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    result = {'original_dry_running_failure': check_original_dry_running_failure(),
+    result = {'dry_running_accounting': check_dry_running_accounting(),
               'source_requirements': check_source_requirements(out_dir),
               'invalid_requirements': check_invalid_requirements(out_dir),
               'reserve': check_reserve(),

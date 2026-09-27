@@ -40,6 +40,10 @@ def _expand_definitions(
 ) -> Expr:
     visited = set(seen or set())
     if isinstance(expression, Var) and expression.name in model.definitions:
+        if expression.name in model.sampled_state:
+            raise ValueError(
+                f"stored sampled value {expression.name} also has a timeless definition"
+            )
         if expression.name in visited:
             raise ValueError(f"cyclic definition {expression.name}")
         return _expand_definitions(
@@ -461,7 +465,7 @@ def _timing_record(
     dt_record: dict[str, Any],
 ) -> dict[str, Any]:
     sampled = []
-    for fact in mdp_certificate.get("equation_proof", {}).get("facts", []):
+    for fact in (mdp_certificate.get("equation_proof") or {}).get("facts", []):
         if fact.get("rule") != "sampled_memory_bound":
             continue
         detail = fact.get("detail") or {}

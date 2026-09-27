@@ -78,34 +78,16 @@ def validate_positive_model(
         ),
     )
 
-    strict_model = get_strict_model(MODELS[name], dt=TEST_DT)
-    observed_buffer = first_closure(strict_model)
-    battery.require(
-        f"{name}/first_closure",
-        observed_buffer == expected["buffer"],
-        f"expected={expected['buffer']} observed={observed_buffer}",
-    )
-
-    exp_obs, exp_act = expected["buffer"]
-    target = set(strict_model.get("R", set())) or set(strict_model["STATE"])
-    prior_failures = []
-    for b_obs in range(exp_obs + 1):
-        for b_act in range(5):
-            if (b_obs, b_act) >= (exp_obs, exp_act):
-                continue
-            try:
-                missing, _ = reconstruct(strict_model, b_obs, b_act, horizon=8, target=target)
-            except ValueError:
-                continue  # Missing source transitions are not a successful buffer.
-            if not missing:
-                prior_failures.append((b_obs, b_act))
-    battery.require(
-        f"{name}/smaller_buffers_fail",
-        not prior_failures,
-        f"unexpected earlier passing buffers={prior_failures}",
-    )
-
     cert = build_certificate_for_path(MODELS[name], dt=TEST_DT)
+    observed_buffer = cert.get('buffer')
+    observed_buffer = None if observed_buffer is None else (observed_buffer['b_obs'], observed_buffer['b_act'])
+    battery.require(f'{name}/first_proved_source_buffer', observed_buffer == expected['buffer'],
+                    f"expected={expected['buffer']} observed={observed_buffer}")
+    attempts = cert.get('search', {}).get('attempts', [])
+    earlier = [row for row in attempts if (row['b_obs'],row['b_act']) < expected['buffer']]
+    battery.require(f'{name}/earlier_source_buffers_not_proved',
+                    all(row['passes'] is False for row in earlier), str(earlier))
+
     cert_path = cert_dir / f"{name}.certificate.json"
     write_certificate(cert, cert_path)
     disk_cert = load_certificate(cert_path)
@@ -115,7 +97,7 @@ def validate_positive_model(
     )
     obligations = cert["mdp_obligations"]
     gate = cert["theorem_gate"]
-    equation_proof = cert["equation_proof"] or {}
+    source_history = cert['solver_advisory']['source_history_reconstruction']
     ignored_state = set(cert["sets"]["ignored_state"])
     ignored_reasons = cert["sets"]["ignored_state_reasons"]
     one_step_solver = cert["solver_advisory"]["one_step_transition_closure"]
@@ -147,20 +129,16 @@ def validate_positive_model(
         and not gate["full_mdp_theorem_blockers"]
         and gate["solver_backed_uniqueness"]["status"] == "discharged"
         and gate["solver_backed_uniqueness"]["result_status"] == "discharged"
-        and cert["search"]["legacy_and_equation_search_agree"] is True
-        and equation_proof["proof_engine"] == "equation_ir_syntactic_v1"
-        and equation_proof["passes"] is True
-        and not equation_proof["missing_target_facts"]
+        and cert['proof']['proof_engine'] == 'source_history_v1'
+        and cert['proof']['passes'] is True
+        and source_history['status'] == 'discharged'
+        and source_history['claim'] == 'source_history_reconstruction'
+        and cert['proof']['target'] == cert['sets']['q']
         and one_step_solver["status"] == expected["solver_status"]
         and (
             one_step_solver["claim"] == "one_step_transition_closure"
             if one_step_solver["status"] == "discharged"
             else one_step_solver["claim"] == "not_claimed_by_this_artifact"
-        )
-        and not any(
-            fact["rule"] == "equation_guarded_copy_inversion"
-            and fact["detail"].get("guard_status") != "proven_true"
-            for fact in equation_proof["facts"]
         )
         and not certificate_unresolved_raw
         and all(

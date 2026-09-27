@@ -42,8 +42,13 @@ def _copy_source(eq_model, expr, seen=None):
 
 
 def get_strict_model(path, *, dt, enable_sampled_memory=True):
+    return strict_model_from_equations(extract_equation_model(path), dt=dt,
+                                       enable_sampled_memory=enable_sampled_memory)
+
+
+def strict_model_from_equations(eq_model, *, dt, enable_sampled_memory=True):
+    """Reuse one source extraction within certificate generation."""
     dt = validate_dt(dt)
-    eq_model = extract_equation_model(path)
     relevance = compute_transition_closed_relevance(eq_model)
     nsupp = {}
     copies = set()

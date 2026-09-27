@@ -5,7 +5,7 @@ of a cross-part scheduler, numerical flow, or encoded-observation MDP theorem.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field, replace
 import hashlib
 import json
 import re
@@ -15,7 +15,7 @@ from clarity.sysml import parser as ast
 from clarity.sysml.expression_types import expression_type, parse_checked_expression
 from clarity.sysml.parser_values import assigned_features, initialization_values
 
-VERSION = 2
+VERSION = 4
 SAFETY_TAGS = {'Prohibition', 'Obligation'}
 
 
@@ -159,6 +159,8 @@ class ExecutionInventory:
     property_inventory: tuple
     value_types: dict
     diagnostics: tuple
+    decision_transition: dict = field(default_factory=dict)
+    compact_transition: dict = field(default_factory=dict)
     version: int = VERSION
 
     def to_dict(self):
@@ -192,6 +194,7 @@ def build_execution_description(parser):
             if isinstance(stmt, ast.AssignStmt):
                 target = resolve_source_key(parser, context, stmt.target)
                 data = {'target': target, 'expression': expression_record(stmt.expr),
+                        'source_target': list(stmt.target),
                         'metadata': list(stmt.metadata), 'read_state': 'preceding_event',
                         'write_state': identity, 'unaffected_storage': 'unchanged'}
                 try:
@@ -258,8 +261,16 @@ def build_execution_description(parser):
     initial += [{'target': p.qualified_name,
                  'kind': 'initial' if p.qualified_name in assigned else 'parameter', 'value': p.value,
                  'metadata': list(p.metadata)} for p in parser.parameters]
-    return ExecutionInventory(hashlib.sha256(Path(parser.file_path).read_bytes()).hexdigest(),
-                              tuple(programs), tuple(initial), tuple(properties), types, tuple(diagnostics))
+    inventory = ExecutionInventory(hashlib.sha256(Path(parser.file_path).read_bytes()).hexdigest(),
+                                   tuple(programs), tuple(initial), tuple(properties), types, tuple(diagnostics))
+    from .decision_transition import compose_decision_transition
+    from .compact_transition import compact_decision_transition, validate_compact_transition
+    graph = compose_decision_transition(parser, inventory)
+    compact = compact_decision_transition(graph)
+    errors = validate_compact_transition(compact, graph)
+    if errors:
+        raise ValueError('; '.join(errors))
+    return replace(inventory, decision_transition=graph, compact_transition=compact)
 
 
 def validate_execution_description(record, model_path):

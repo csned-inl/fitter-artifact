@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Proof-artifact emission for strict Q reconstructibility.
 
-The certificate combines the replayed strict-Q reconstruction proof with a
-solver-backed one-step uniqueness proof over the extracted equation semantics.
+The certificate combines source-history reconstruction with a solver-backed
+one-step uniqueness proof over the same extracted execution semantics.
 Passing artifacts may claim the solver-backed strict-Q MDP theorem only when
 both gates discharge and the independent checker verifies the recorded evidence.
 """
@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from clarity.certification.reconstruct import get_strict_model
+from clarity.certification.reconstruct import strict_model_from_equations
 from clarity.sysml.parser import (
     BinaryExpr,
     LiteralExpr,
@@ -119,12 +119,17 @@ def _theorem_gate(
     blocking: list[Diagnostic],
     profile_obligations_discharged: bool,
     solver_result: dict[str, Any] | None,
+    source_history_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    source_reconstruction = bool(proof and proof.get('proof_engine') == 'source_history_v1'
+        and proof.get('passes') is True and source_history_result
+        and source_history_result.get('status') == 'discharged'
+        and source_history_result.get('claim') == 'source_history_reconstruction'
+        and all(proof.get(k) == source_history_result.get(k) for k in ('b_obs', 'b_act', 'graph_sha256')))
+    legacy_reconstruction = bool(proof and proof.get('proof_engine') != 'source_history_v1'
+        and proof.get('passes') and equation_proof and equation_proof.get('passes'))
     profile_discharged = bool(
-        proof
-        and proof.get("passes")
-        and equation_proof
-        and equation_proof.get("passes")
+        (source_reconstruction or legacy_reconstruction)
         and not blocking
         and profile_obligations_discharged
     )
@@ -138,7 +143,12 @@ def _theorem_gate(
         blockers.append("profile_mdp_theorem_not_discharged")
     if not solver_discharged:
         blockers.append("solver_one_step_transition_closure_not_discharged")
-    full_claim_allowed = profile_discharged and solver_discharged
+    history_discharged = bool(source_history_result
+        and source_history_result.get('status') == 'discharged'
+        and source_history_result.get('claim') == 'source_history_reconstruction')
+    if not history_discharged:
+        blockers.append('source_history_reconstruction_not_discharged')
+    full_claim_allowed = profile_discharged and solver_discharged and history_discharged
     solver_gate = {
         "status": "discharged" if solver_discharged else "not_discharged",
         "source": "solver_advisory.one_step_transition_closure",
@@ -172,7 +182,7 @@ def _theorem_gate(
             "discharged" if full_claim_allowed else "not_discharged"
         ),
         "profile_theorem_statement": (
-            "Within the extracted strict-Q syntactic semantics, the selected "
+            "Within the extracted source execution semantics, the selected "
             "finite buffer reconstructs q and determines observations, "
             "requirement statuses, reward, done, and exact shield execution "
             "as recorded in mdp_obligations."
@@ -191,8 +201,8 @@ def _theorem_gate(
             "solver-backed one-step self-composition over q and executed action",
         ],
         "profile_requires": [
-            "strict proof trace reconstructs every q variable at tau=0",
-            "equation-IR proof trace reconstructs every q variable at tau=0",
+            "source-history proof reconstructs every q variable",
+            "source-history evidence is independently rebuilt and checked",
             "no blocking extraction diagnostics",
             "no legacy dependency fallback transitions",
             "observation obligations discharged",
@@ -203,6 +213,7 @@ def _theorem_gate(
         ],
         "profile_obligations_discharged": profile_obligations_discharged,
         "solver_backed_uniqueness": solver_gate,
+        "source_history_reconstruction": "discharged" if history_discharged else "not_discharged",
         "full_mdp_theorem_claim_allowed": full_claim_allowed,
         "full_mdp_theorem_blockers": blockers,
         "claim_policy": (
@@ -807,47 +818,17 @@ def build_certificate_for_path(
     dt = validate_dt(dt)
     eq_model = extract_equation_model(model_path)
     relevance = compute_transition_closed_relevance(eq_model)
-    strict_model = get_strict_model(
-        model_path, dt=dt, enable_sampled_memory=enable_sampled_memory
+    strict_model = strict_model_from_equations(
+        eq_model, dt=dt, enable_sampled_memory=enable_sampled_memory
     )
     target = set(strict_model.get("R", set())) or set(strict_model["STATE"])
     blocking = _blocking_diagnostics(eq_model.diagnostics)
 
-    selected, attempts = _strict_search(
-        strict_model, max_obs=max_obs, max_act=max_act, horizon=horizon
-    )
-    equation_selected, equation_attempts = equation_search(
-        eq_model,
-        max_obs=max_obs,
-        max_act=max_act,
-        horizon=horizon,
-        target=set(relevance.q),
-        dt=dt,
-        enable_sampled_memory=enable_sampled_memory,
-    )
-    if b_obs is None or b_act is None:
-        if selected is not None:
-            b_obs, b_act = selected
-    else:
-        selected = (b_obs, b_act)
-
-    proof = None
-    equation_proof = None
+    # Buffer selection is completed after source-transition feasibility below.
+    # Scalar dependency/copy heuristics are no longer a prerequisite or fallback.
+    selected, attempts = None, []
+    proof, equation_proof = None, None
     result = "UNKNOWN"
-    if b_obs is not None and b_act is not None:
-        proof = reconstruction_trace(
-            strict_model, b_obs, b_act, horizon=horizon, target=target
-        )
-        equation_proof = equation_reconstruction_trace(
-            eq_model,
-            b_obs,
-            b_act,
-            horizon=horizon,
-            target=set(relevance.q),
-            dt=dt,
-            enable_sampled_memory=enable_sampled_memory,
-        )
-        result = "PASS" if proof["passes"] and not blocking else "FAIL"
 
     ignored = sorted(set(eq_model.state) - set(relevance.q))
     transition_kinds = {
@@ -879,20 +860,52 @@ def build_certificate_for_path(
         mdp_obligations.get("overall_mdp_theorem_status")
         == PROFILE_OBLIGATIONS_DISCHARGED
     )
+    from .compact_transition import check_block_equations
+    compact_check = check_block_equations(
+        eq_model.execution['compact_transition'], eq_model.execution['decision_transition'],
+        include_artifacts=include_solver_artifacts,
+    )
+    if compact_check['status'] != 'discharged':
+        eq_model.add_diagnostic('error', 'compact_transition_not_preserved',
+                                'compact equations have not passed source correspondence checking')
+        blocking = _blocking_diagnostics(eq_model.diagnostics)
     solver_advisory = {
+        'compact_representation_preservation': compact_check,
         "one_step_transition_closure": one_step_transition_closure(
             eq_model,
             set(relevance.q),
-            timeout_ms=1000,
+            dt=dt,
+            timeout_ms=30000,
             include_artifacts=include_solver_artifacts,
         )
     }
+    from .source_buffer import select_source_buffer
+    closure = solver_advisory['one_step_transition_closure']
+    if closure.get('status') == 'discharged' and closure.get('claim') == 'one_step_transition_closure':
+        search = select_source_buffer(eq_model, set(relevance.q), dt=dt,
+            max_obs=max_obs, max_act=max_act, b_obs=b_obs, b_act=b_act,
+            include_artifacts=include_solver_artifacts)
+    else:
+        search = {'selected': None, 'proof': None, 'attempts': [],
+                  'minimality_claim': 'not searched: source-transition proof not discharged'}
+    selected, attempts = search['selected'], search['attempts']
+    if selected is not None:
+        b_obs, b_act = selected
+    history = search['proof'] or {'status': 'unknown', 'claim': 'not_claimed',
+        'reason': 'no_source_buffer_proved' if attempts else 'source_transition_not_discharged'}
+    solver_advisory['source_history_reconstruction'] = history
+    proof = {'proof_engine': 'source_history_v1',
+             'passes': selected is not None, 'b_obs': b_obs, 'b_act': b_act,
+             'target': sorted(relevance.q),
+             'graph_sha256': eq_model.execution['decision_transition']['sha256'],
+             'evidence_source': 'solver_advisory.source_history_reconstruction'}
     theorem_gate = _theorem_gate(
         proof=proof,
         equation_proof=equation_proof,
         blocking=blocking,
         profile_obligations_discharged=profile_obligations_discharged,
         solver_result=solver_advisory["one_step_transition_closure"],
+        source_history_result=solver_advisory['source_history_reconstruction'],
     )
     if proof is not None:
         result = (
@@ -924,7 +937,7 @@ def build_certificate_for_path(
             "description": (
                 "Proof that the selected finite buffer reconstructs the "
                 "transition-closed relevant state q under the extracted "
-                "equation/dependency semantics, and that Z3 discharges the "
+                "source execution semantics, and that Z3 discharges the "
                 "one-step self-composed uniqueness obligation over q, executed "
                 "actions, observations, terminal equations, and requirement "
                 "status equations. Reward and done obligations are discharged "
@@ -950,8 +963,8 @@ def build_certificate_for_path(
             "blocking_diagnostic_severities": sorted(BLOCKING_DIAGNOSTIC_SEVERITIES),
             "blocking_diagnostic_codes": sorted(BLOCKING_DIAGNOSTIC_CODES),
             "pass_requires": [
-                "selected buffer reconstructs every q variable at tau=0",
-                "equation-IR proof trace reconstructs every q variable at tau=0",
+                "source-transition history proof reconstructs every q variable",
+                "independent checker rebuilds that source-history proof",
                 "no warning/error diagnostics",
                 "no legacy dependency fallback transitions",
                 "reward and done obligations discharged over the augmented state",
@@ -970,13 +983,8 @@ def build_certificate_for_path(
                 else {"b_obs": selected[0], "b_act": selected[1]}
             ),
             "attempts": attempts,
-            "equation_ir_selected_first_passing": (
-                None if equation_selected is None
-                else {"b_obs": equation_selected[0], "b_act": equation_selected[1]}
-            ),
-            "equation_ir_attempts": equation_attempts,
-            "legacy_and_equation_search_agree": selected == equation_selected,
-            "minimality_claim": "first passing pair in stated bounded lexicographic scan",
+            "proof_engine": "source_history_v1",
+            "minimality_claim": search['minimality_claim'],
         },
         "sets": {
             "state": sorted(eq_model.state),

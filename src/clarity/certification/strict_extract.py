@@ -85,6 +85,33 @@ class CertificationExtractor:
         finish_value_semantics(self)
         from .ordered_execution import build_execution_description
         self.model.execution = build_execution_description(self.parser).to_dict()
+        composed = self.model.execution['decision_transition']
+        self.model.value_semantics['decision_transition_sha256'] = composed['sha256']
+        # These are source-owned writer sites in the composed relation, not
+        # substitutes for a solver-checked next-decision equation.
+        storage_by_name = defaultdict(list)
+        for key, record in composed['storage'].items():
+            if key.startswith(self.parser.system_part + '::'):
+                storage_by_name[self.canonical_name(key.split('::'))].append((key, record))
+        # The legacy equation view names machine-state encodings <part>_state.
+        # Their actual storage is current_sm_state, not engine.state; retain that
+        # distinction instead of manufacturing a source attribute or Boolean.
+        for context in self.parser.instance_state_machines:
+            key = '$machine:' + context
+            storage_by_name[f'{self._inst_name(context)}_state'].append((key, composed['storage'][key]))
+        self.model.value_semantics['decision_updates'] = {
+            name: [{'runtime_key': key, 'writers': record['writers'],
+                    'otherwise': record['otherwise']}
+                   for key, record in sorted(storage_by_name[name])]
+            for name in sorted(self.model.state)
+        }
+        for name in sorted(self.model.state):
+            if not storage_by_name[name]:
+                self.model.add_diagnostic('error', 'missing_composed_storage',
+                    'state is absent from the source decision-transition storage inventory', name)
+        self.model.add_diagnostic('error', 'decision_transition_solver_required',
+            'ordered decision paths are composed; the equation solver must discharge '
+            'their relationship to its next-state equations before certification')
         self.model.declared_sorts = {
             self.canonical_name(name.split('::')): {'Boolean': 'Bool', 'Integer': 'Int', 'Real': 'Real'}[sort]
             for name, sort in self.model.execution['value_types'].items()
@@ -94,7 +121,8 @@ class CertificationExtractor:
             self.model.add_diagnostic('error', diagnostic['code'], diagnostic['message'], diagnostic['source'])
         for name in sorted(self.model.state - set(self.model.transitions)):
             self.model.add_diagnostic('error', 'missing_ordered_update',
-                'no decision transition or source-justified hold', name)
+                'the equation solver has no next-decision equation for this storage; '
+                'its composed writer sites are retained in value_semantics.decision_updates', name)
         self._audit_equations()
         return self.model
 
@@ -780,7 +808,8 @@ class CertificationExtractor:
             self.model.add_diagnostic(
                 "error",
                 "missing_transition_equation",
-                "state value has no transition equation in the SysML file",
+                "equation solver lacks a verified next-decision equation; "
+                "source update operations are retained in composed execution",
                 target,
             )
         known_vars = self.model.state | self.model.actions | set(self.model.definitions)

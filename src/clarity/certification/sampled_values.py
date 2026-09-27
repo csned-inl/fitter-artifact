@@ -146,9 +146,6 @@ def finish_value_semantics(extractor):
         "physical_values": sorted(physical),
         "implicit_sample_to_physical_equality": False,
     }
-    if model.sample_events:
-        model.add_diagnostic(
-            "error", "sample_event_composition_required",
-            "sample/delivery storage is explicit; these event equations require an "
-            "ordered decision-to-decision composition before Markov certification",
-        )
+    # strict_extract attaches the composed decision relation after this value
+    # inventory is complete. Solver discharge of that relation remains a hard
+    # certification gate; event equations alone never authorize certification.

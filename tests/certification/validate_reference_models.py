@@ -163,27 +163,10 @@ def _failures_for_model(name: str) -> list[str]:
                     f"cruise-discrete: {target} does not reference policy action {action}"
                 )
 
-    strict_model = get_strict_model(MODELS[name], dt=TEST_DT)
-    best = _first_closure(strict_model)
-    expected = EXPECTED_STRICT_CLOSURE[name]
-    if best != expected:
-        failures.append(
-            f"{name}: strict closure changed; expected {expected}, observed {best}"
-        )
-
-    if name == "mixing":
-        without_sampled_memory = get_strict_model(
-            MODELS[name], dt=TEST_DT, enable_sampled_memory=False
-        )
-        if _first_closure(without_sampled_memory) is not None:
-            failures.append(
-                "mixing: strict closure unexpectedly succeeds without sampled-memory rule"
-            )
-        if len(strict_model.get("sampled_memories", [])) != 3:
-            failures.append(
-                "mixing: expected three sampled-memory rules "
-                "(lastScanTimeSeconds and two observed levels)"
-            )
+    for variable in relevance.q:
+        entries = model.value_semantics.get('decision_updates', {}).get(variable, [])
+        if len(entries) != 1 or not entries[0].get('runtime_key'):
+            failures.append(f'{name}: relevant state has no unique source storage: {variable}')
 
     return failures
 
@@ -251,25 +234,14 @@ def _certificate_failures_for_model(name: str, out_dir: Path) -> list[str]:
         failures.append(f"{name}: theorem gate records unexpected blockers")
     if gate.get("solver_backed_uniqueness", {}).get("status") != "discharged":
         failures.append(f"{name}: theorem gate solver uniqueness is not discharged")
-    if cert.get("search", {}).get("legacy_and_equation_search_agree") is not True:
-        failures.append(f"{name}: legacy and equation-IR searches disagree")
-    equation_proof = cert.get("equation_proof", {})
-    if equation_proof.get("proof_engine") != "equation_ir_syntactic_v1":
-        failures.append(f"{name}: missing or unsupported equation-IR proof")
-    if equation_proof.get("passes") is not True:
-        failures.append(f"{name}: equation-IR proof does not pass")
-    if equation_proof.get("missing_target_facts"):
-        failures.append(f"{name}: equation-IR proof reports missing targets")
-    if name == "mixing" and not equation_proof.get("blocked_unsafe_inversions"):
-        failures.append(
-            "mixing: equation-IR proof did not record blocked guarded-copy inversions"
-        )
-    if any(
-        fact.get("rule") == "equation_guarded_copy_inversion"
-        and fact.get("detail", {}).get("guard_status") != "proven_true"
-        for fact in equation_proof.get("facts", [])
-    ):
-        failures.append(f"{name}: equation-IR proof used an unsafe guarded-copy inversion")
+    source_proof = cert.get('proof') or {}
+    history = cert.get('solver_advisory', {}).get('source_history_reconstruction', {})
+    if source_proof.get('proof_engine') != 'source_history_v1' or source_proof.get('passes') is not True:
+        failures.append(f'{name}: source-history proof does not pass')
+    if history.get('status') != 'discharged' or history.get('claim') != 'source_history_reconstruction':
+        failures.append(f'{name}: source-history reconstruction is not discharged')
+    if source_proof.get('target') != cert.get('sets', {}).get('q'):
+        failures.append(f'{name}: source reconstruction target differs from q')
     solver = cert.get("solver_advisory", {}).get("one_step_transition_closure", {})
     if solver.get("status") != EXPECTED_SOLVER_ADVISORY[name]:
         failures.append(

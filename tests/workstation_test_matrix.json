@@ -1,0 +1,192 @@
+[
+  {
+    "name": "workstation_batch",
+    "command": [
+      "tests/validate_workstation_batch.py"
+    ],
+    "phase": 0,
+    "memory_gb": 1
+  },
+  {
+    "name": "source_buffer",
+    "command": [
+      "tests/certification/validate_source_buffer.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "checked_type_specialization",
+    "command": [
+      "tests/certification/validate_type_facts.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "checked_constant_propagation",
+    "command": [
+      "tests/certification/validate_constant_facts.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "source_call_composition",
+    "command": [
+      "tests/certification/validate_call_composition.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "source_history",
+    "command": [
+      "tests/certification/validate_source_history.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "compact_lazy_implementation",
+    "command": [
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests/certification",
+      "-p",
+      "validate_lazy_*.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "lazy_expressions",
+    "command": [
+      "tests/certification/validate_lazy_expressions.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "execution_equations",
+    "command": [
+      "tests/certification/validate_execution_equations.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "backend_capability",
+    "command": [
+      "tests/certification/check_lazy_backend.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "mixing_contract",
+    "command": [
+      "tests/certification/validate_mixing_contract.py",
+      "--out",
+      "outputs/compact_lazy_validation/tests/mixing-contract.json"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "reference_models",
+    "command": [
+      "tests/certification/validate_reference_models.py"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  },
+  {
+    "name": "response_timing",
+    "command": [
+      "tests/training/validate_response_timing.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "original_parser",
+    "command": [
+      "tests/training/validate_original_parser_integration.py"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "certification_battery",
+    "command": [
+      "tests/certification/validate_certification_battery.py"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  },
+  {
+    "name": "value_integration",
+    "command": [
+      "tests/training/validate_value_integration.py"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  },
+  {
+    "name": "discretization_arithmetic",
+    "command": [
+      "-c",
+      "import sys; sys.path.insert(0,'tests/discretization'); from proof_rule_validation import validate_proof_rules; validate_proof_rules()"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "source_safety",
+    "command": [
+      "tests/training/validate_sysml_safety.py",
+      "--out-dir",
+      "outputs/compact_lazy_validation/tests/source-safety"
+    ],
+    "phase": 0,
+    "memory_gb": 4
+  },
+  {
+    "name": "discretization_values",
+    "command": [
+      "-c",
+      "import sys; sys.path.insert(0,'tests/discretization'); from value_state_validation import validate_value_states; validate_value_states()"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  },
+  {
+    "name": "compact_transition",
+    "command": [
+      "tests/certification/validate_compact_transition.py"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  },
+  {
+    "name": "decision_transition",
+    "command": [
+      "tests/certification/validate_decision_transition.py"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  },
+  {
+    "name": "reduced_stack",
+    "command": [
+      "tests/training/validate_reduced_stack.py",
+      "--out-dir",
+      "outputs/compact_lazy_validation/tests/reduced-stack"
+    ],
+    "phase": 1,
+    "memory_gb": 30
+  }
+]

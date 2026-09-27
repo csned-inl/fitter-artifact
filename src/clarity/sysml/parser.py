@@ -208,10 +208,10 @@ class ExpressionParser:
 
     def _parse_implies(self) -> Expr:
         left = self._parse_or()
-        self._skip_whitespace()
-        if self._consume('implies'):
-            right = self._parse_implies()
-            return BinaryExpr('implies', left, right)
+        # KerML ImpliesExpression folds OrExpression operands left to right.
+        while self._consume('implies'):
+            right = self._parse_or()
+            left = BinaryExpr('implies', left, right)
         return left
 
     def _parse_or(self) -> Expr:
@@ -238,20 +238,21 @@ class ExpressionParser:
 
     def _parse_equality(self) -> Expr:
         left = self._parse_comparison()
-        self._skip_whitespace()
-        if self._consume('=='):
+        while self._consume('=='):
             right = self._parse_comparison()
-            return BinaryExpr('==', left, right)
+            left = BinaryExpr('==', left, right)
         return left
 
     def _parse_comparison(self) -> Expr:
         left = self._parse_additive()
-        self._skip_whitespace()
-        for op in ['>=', '<=', '>', '<']:
-            if self._consume(op):
-                right = self._parse_additive()
-                return BinaryExpr(op, left, right)
-        return left
+        while True:
+            for op in ['>=', '<=', '>', '<']:
+                if self._consume(op):
+                    right = self._parse_additive()
+                    left = BinaryExpr(op, left, right)
+                    break
+            else:
+                return left
 
     def _parse_additive(self) -> Expr:
         left = self._parse_multiplicative()

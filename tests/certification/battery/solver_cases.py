@@ -169,7 +169,7 @@ def run_solver_cases(battery: Battery) -> None:
             f"solver_unit/degree_{degree}_unsat",
             polynomial_result["status"] == "discharged"
             and polynomial_result.get("logic") == "QF_UFNRA"
-            and polynomial_result.get("max_polynomial_degree") == degree,
+            and polynomial_result.get("max_polynomial_degree") == 2,
             f"result={polynomial_result}",
         )
 
@@ -192,7 +192,7 @@ def run_solver_cases(battery: Battery) -> None:
             f"solver_unit/hidden_degree_{degree}_sat",
             hidden_polynomial_result["status"] == "counterexample"
             and hidden_polynomial_result.get("logic") == "QF_UFNRA"
-            and hidden_polynomial_result.get("max_polynomial_degree") == degree
+            and hidden_polynomial_result.get("max_polynomial_degree") == 2
             and hidden_polynomial_result.get("disagreement", {}).get("term") == "next_q.x",
             f"result={hidden_polynomial_result}",
         )
@@ -213,13 +213,10 @@ def run_solver_cases(battery: Battery) -> None:
     )
     too_high_result = one_step_transition_closure(too_high_degree, {"x"})
     battery.require(
-        f"solver_unit/degree_{unsupported_degree}_unknown",
-        too_high_result["status"] == "unknown"
-        and too_high_result.get("reason") == "unsupported_fragment"
-        and any(
-            f"polynomial degree {unsupported_degree}" in item
-            for item in too_high_result.get("unsupported", [])
-        ),
+        f"solver_unit/degree_{unsupported_degree}_compact_unsat",
+        too_high_result["status"] == "discharged"
+        and too_high_result.get("max_polynomial_degree") == 2
+        and too_high_result.get("intermediate_constraints", 0) > 0,
         f"result={too_high_result}",
     )
 

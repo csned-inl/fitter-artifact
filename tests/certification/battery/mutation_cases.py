@@ -307,5 +307,19 @@ def run_mutation_cases(battery: Battery, base: dict[str, Any]) -> None:
             lambda c: c["model"].__setitem__("sha256", "0" * 64),
         ),
     ]
+    if (base.get('proof') or {}).get('proof_engine') == 'source_history_v1':
+        obsolete_trace_cases = {'missing_equation_proof','equation_proof_not_passes',
+            'equation_target_fact_removed','equation_bad_forward_premise','equation_unsafe_guarded_inversion',
+            'target_fact_removed','bad_forward_premise'}
+        mutations = [(name, mutation) for name, mutation in mutations if name not in obsolete_trace_cases]
+        mutations.extend([
+            ('missing_source_history', lambda c: c['solver_advisory'].pop('source_history_reconstruction')),
+            ('source_history_not_discharged', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('status','unknown')),
+            ('source_target_changed', lambda c: c['proof'].__setitem__('target',['not_source_storage'])),
+            ('source_graph_changed', lambda c: c['proof'].__setitem__('graph_sha256','0'*64)),
+            ('source_history_buffer_changed', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('b_act',-1)),
+            ('source_history_encoding_changed', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('observation_dtype','float64')),
+            ('source_history_padding_changed', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('reset_padding','unconstrained')),
+        ])
     for name, mutator in mutations:
         _assert_mutation_rejected(battery, base, name, mutator)

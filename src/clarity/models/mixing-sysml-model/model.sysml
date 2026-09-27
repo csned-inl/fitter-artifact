@@ -368,24 +368,24 @@ package TankFillingSystem {
             send volume1ReadingReq via volumeSensor1Port.req;
             item volume1Res : ReadInputRegisterRespMsg;
             accept volume1Res : ReadInputRegisterRespMsg via volumeSensor1Port.resp;
-            assign observedLevel1 := volume1Res.response;
+            assign observedLevel1 := volume1Res.response - toleranceMl;
 
             item volume2ReadingReq : ReadInputRegisterReqMsg;
             assign volume2ReadingReq.registerAddress := 0;
             send volume2ReadingReq via volumeSensor2Port.req;
             item volume2Res : ReadInputRegisterRespMsg;
             accept volume2Res : ReadInputRegisterRespMsg via volumeSensor2Port.resp;
-            assign observedLevel2 := volume2Res.response;
+            assign observedLevel2 := volume2Res.response - toleranceMl;
 
             action policyCall : Policy {
-                in tank1VolumeMl := volume1Res.response;
-                in tank2VolumeMl := volume2Res.response;
+                in tank1VolumeMl := observedLevel1;
+                in tank2VolumeMl := observedLevel2;
                 in tank1TargetTransferMl := tank1TransferMl;
                 in tank2TargetTransferMl := tank2TransferMl;
                 in tank1OriginalMl := tank1OriginalLevelMl;
                 in tank2OriginalMl := tank2OriginalLevelMl;
-                in done := (tank1OriginalLevelMl - volume1Res.response >= tank1TransferMl) and
-                            (tank2OriginalLevelMl - volume2Res.response >= tank2TransferMl);
+                in done := (tank1OriginalLevelMl - observedLevel1 >= tank1TransferMl) and
+                            (tank2OriginalLevelMl - observedLevel2 >= tank2TransferMl);
             }
 
             if policyCall.shouldOpenValve1 {

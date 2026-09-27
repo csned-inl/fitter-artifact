@@ -69,8 +69,22 @@ def _check_schema_and_equations(
     model_info = certificate.get("model", {})
     model_path = model_info.get("path")
     execution = certificate.get("execution")
-    if not isinstance(execution, dict) or execution.get("version") != 1:
+    from .ordered_execution import VERSION as EXECUTION_VERSION
+    if not isinstance(execution, dict) or execution.get("version") != EXECUTION_VERSION:
         errors.append("missing source-bound ordered execution")
+    if not isinstance(execution, dict) or not execution.get('decision_transition'):
+        errors.append('missing composed decision transition')
+    if not isinstance(execution, dict) or not execution.get('compact_transition'):
+        errors.append('missing compact decision transition')
+    elif execution.get('decision_transition'):
+        from .compact_transition import validate_compact_transition
+        errors.extend(validate_compact_transition(execution['compact_transition'],
+                                                  execution['decision_transition']))
+        compact_evidence = certificate.get('solver_advisory', {}).get(
+            'compact_representation_preservation', {})
+        if (compact_evidence.get('status') != 'discharged'
+                or compact_evidence.get('claim') != 'compact_representation_preservation'):
+            errors.append('compact representation preservation is not discharged')
     semantics = certificate.get("value_semantics")
     if not isinstance(semantics, dict) or semantics.get("version") != 1:
         errors.append("missing explicit physical/sampled value semantics")
@@ -82,37 +96,10 @@ def _check_schema_and_equations(
             physical, sampled = pair.get("physical_value"), pair.get("sampled_value")
             if physical == sampled or not {physical, sampled} <= state_variables:
                 errors.append("physical/sampled pair does not name two distinct state variables")
-    if check_hash and (not model_path or not Path(model_path).is_file()):
+    if not model_path or not Path(model_path).is_file():
         errors.append("source model is unavailable for semantic verification")
-    if check_hash and model_path and Path(model_path).is_file():
-        if model_hash(model_path) != model_info.get("sha256"):
-            errors.append("model sha256 does not match certificate")
-        from .strict_extract import extract_equation_model
-        try:
-            source_model = extract_equation_model(str(model_path))
-            from .ordered_execution import validate_execution_description
-            errors.extend(validate_execution_description(execution, model_path))
-            from .certificate_generation import _equation_to_dict
-            for section in ('definitions', 'observations', 'terminals', 'transitions', 'requirements'):
-                expected = [_equation_to_dict(e, source_model.constants) for e in
-                            sorted(getattr(source_model, section).values(), key=lambda e: e.target)]
-                if certificate.get('equations', {}).get(section) != expected:
-                    errors.append(f'{section} equations differ from source reconstruction')
-            from .relevance import compute_transition_closed_relevance
-            from .solver import one_step_transition_closure
-            q = compute_transition_closed_relevance(source_model).q
-            if set(certificate.get('sets', {}).get('q', [])) != set(q):
-                errors.append('certified state differs from source relevance')
-            checked = one_step_transition_closure(source_model, set(q), timeout_ms=1000)
-            if checked.get('status') != 'discharged':
-                errors.append('source-reconstructed solver obligation is not discharged')
-            if semantics != source_model.value_semantics:
-                errors.append("physical/sampled value semantics do not match source")
-            for diagnostic in source_model.diagnostics:
-                if diagnostic.severity in {"warning", "error"}:
-                    errors.append(diagnostic.pretty())
-        except (ValueError, KeyError, TypeError) as exc:
-            errors.append(f"source value reconstruction failed: {exc}")
+    elif check_hash and model_hash(model_path) != model_info.get("sha256"):
+        errors.append("model sha256 does not match certificate")
 
     diagnostics = certificate.get("diagnostics", {})
     if diagnostics.get("blocking"):
@@ -153,6 +140,85 @@ def _check_schema_and_equations(
     return errors
 
 
+def _check_source_evidence(certificate: dict[str, Any]) -> list[str]:
+    """Rebuild proof obligations only after structural prerequisites pass."""
+    errors = []
+    model_path = certificate.get('model', {}).get('path')
+    execution = certificate.get('execution')
+    semantics = certificate.get('value_semantics')
+    if model_path and Path(model_path).is_file():
+        from .strict_extract import extract_equation_model
+        try:
+            source_model = extract_equation_model(str(model_path))
+            # Reuse this independently extracted source model instead of parsing
+            # and composing the same source a second time during verification.
+            if execution != source_model.execution:
+                errors.append('ordered execution/property/type inventory does not match source')
+            from .compact_transition import check_block_equations
+            compact_check = check_block_equations(
+                execution['compact_transition'], source_model.execution['decision_transition'])
+            if compact_check['status'] != 'discharged':
+                errors.append('source-reconstructed compact equations are not preserved')
+            recorded_compact_check = certificate.get('solver_advisory', {}).get(
+                'compact_representation_preservation', {})
+            if any(recorded_compact_check.get(k) != v for k, v in compact_check.items()):
+                errors.append('recorded compact-equation evidence differs from independent check')
+            from .certificate_generation import _equation_to_dict
+            for section in ('definitions', 'observations', 'terminals', 'transitions', 'requirements'):
+                expected = [_equation_to_dict(e, source_model.constants) for e in
+                            sorted(getattr(source_model, section).values(), key=lambda e: e.target)]
+                if certificate.get('equations', {}).get(section) != expected:
+                    errors.append(f'{section} equations differ from source reconstruction')
+            from .relevance import compute_transition_closed_relevance
+            from .solver import one_step_transition_closure
+            q = compute_transition_closed_relevance(source_model).q
+            if set(certificate.get('sets', {}).get('q', [])) != set(q):
+                errors.append('certified state differs from source relevance')
+            if semantics != source_model.value_semantics:
+                errors.append("physical/sampled value semantics do not match source")
+            errors.extend(diagnostic.pretty() for diagnostic in source_model.diagnostics
+                          if diagnostic.severity in {'warning', 'error'})
+            if errors:
+                return errors
+            checked = one_step_transition_closure(source_model, set(q), timeout_ms=30000,
+                                                 dt=certificate.get('settings', {}).get('dt'))
+            if checked.get('status') != 'discharged':
+                errors.append('source-reconstructed solver obligation is not discharged')
+            recorded_solver = certificate.get('solver_advisory', {}).get('one_step_transition_closure', {})
+            for field in ('graph_sha256', 'implementation_sha256', 'equations',
+                          'initialization_scope', 'progress', 'progress_evidence', 'type_specialization'):
+                if recorded_solver.get(field) != checked.get(field):
+                    errors.append('source transition solver evidence differs: ' + field)
+            if errors:
+                return errors
+            history = certificate.get('solver_advisory', {}).get('source_history_reconstruction', {})
+            if history.get('status') != 'discharged' or history.get('claim') != 'source_history_reconstruction':
+                errors.append('encoded source-history reconstruction is not discharged')
+            else:
+                from .source_solver import check_source_history_reconstruction
+                buffer = certificate.get('buffer') or {}
+                rebuilt = check_source_history_reconstruction(source_model, set(q),
+                    dt=certificate.get('settings', {}).get('dt'),
+                    b_obs=buffer.get('b_obs'), b_act=buffer.get('b_act'), timeout_ms=30000)
+                if rebuilt.get('status') != 'discharged':
+                    errors.append('source-history proof did not pass independent solver replay')
+                for field in ('graph_sha256', 'implementation_sha256', 'b_obs', 'b_act',
+                              'observation_keys', 'observation_scale', 'observation_dtype',
+                              'augmented_state', 'scope', 'reset_padding', 'buffer_layout', 'normalization_contract',
+                              'state_layout', 'omitted_constant_fields'):
+                    if history.get(field) != rebuilt.get(field):
+                        errors.append('source-history evidence differs: ' + field)
+            if semantics != source_model.value_semantics:
+                errors.append("physical/sampled value semantics do not match source")
+            for diagnostic in source_model.diagnostics:
+                if diagnostic.severity in {"warning", "error"}:
+                    errors.append(diagnostic.pretty())
+        except (ValueError, KeyError, TypeError) as exc:
+            errors.append(f"source value reconstruction failed: {exc}")
+
+    return errors
+
+
 def _check_theorem_gate(certificate: dict[str, Any]) -> list[str]:
     """Check theorem gates, noninterference records, and solver evidence."""
     errors: list[str] = []
@@ -186,10 +252,11 @@ def _check_theorem_gate(certificate: dict[str, Any]) -> list[str]:
         errors.append("solver-backed uniqueness claim label is wrong")
     if solver_gate.get("solver") != "z3":
         errors.append("solver-backed uniqueness must be discharged by z3")
-    if solver_gate.get("logic") not in {"QF_UFLRA", "QF_UFNRA"}:
+    native_source = solver_gate.get('logic') == 'HORN+FP64+Int+datatypes'
+    if solver_gate.get("logic") not in {"QF_UFLRA", "QF_UFNRA", 'HORN+FP64+Int+datatypes'}:
         errors.append(f"unsupported solver logic={solver_gate.get('logic')}")
     degree = solver_gate.get("max_polynomial_degree")
-    if (
+    if not native_source and (
         not isinstance(degree, int)
         or degree < 0
         or degree > MAX_SOLVER_POLYNOMIAL_DEGREE
@@ -347,6 +414,25 @@ def _check_reconstruction_trace(certificate: dict[str, Any]) -> list[str]:
     proof = certificate.get("proof")
     if not proof:
         errors.append("missing proof section")
+        return errors
+    if proof.get('proof_engine') == 'source_history_v1':
+        history = certificate.get('solver_advisory', {}).get('source_history_reconstruction', {})
+        buffer = certificate.get('buffer') or {}
+        if proof.get('passes') is not True or history.get('status') != 'discharged' or history.get('claim') != 'source_history_reconstruction':
+            errors.append('source-history reconstruction is not discharged')
+        if proof.get('evidence_source') != 'solver_advisory.source_history_reconstruction':
+            errors.append('source-history proof refers to the wrong evidence')
+        if proof.get('target') != certificate.get('sets', {}).get('q'):
+            errors.append('source-history proof target differs from certified q')
+        graph = certificate.get('execution', {}).get('decision_transition', {}).get('sha256')
+        if proof.get('graph_sha256') != graph or history.get('graph_sha256') != graph:
+            errors.append('source-history proof graph differs from source graph')
+        for name in ('b_obs', 'b_act'):
+            value = buffer.get(name)
+            if type(value) is not int or value < 0 or proof.get(name) != value or history.get(name) != value:
+                errors.append('source-history proof buffer mismatch: '+name)
+        # Numerical/semantic evidence is independently reconstructed above in
+        # _check_schema_and_equations, not trusted from this record.
         return errors
     if not proof.get("passes"):
         errors.append("proof section does not pass")
@@ -646,14 +732,19 @@ def _check_equation_trace(certificate: dict[str, Any]) -> list[str]:
 def check_certificate(
     certificate: dict[str, Any], *, check_hash: bool = True
 ) -> list[str]:
-    """Return every structural or replay error found in a certificate."""
+    """Reject structural failures before rebuilding the independent proofs."""
     errors = _check_schema_and_equations(
         certificate, check_hash=check_hash
     )
     errors.extend(_check_theorem_gate(certificate))
     errors.extend(_check_mdp_obligations(certificate))
+    if (certificate.get('proof') or {}).get('proof_engine') != 'source_history_v1':
+        errors.append('current certificate schema requires source-history reconstruction')
     errors.extend(_check_reconstruction_trace(certificate))
     if not certificate.get("proof"):
         return errors
-    errors.extend(_check_equation_trace(certificate))
+    if certificate['proof'].get('proof_engine') != 'source_history_v1':
+        errors.extend(_check_equation_trace(certificate))
+    if not errors:
+        errors.extend(_check_source_evidence(certificate))
     return errors

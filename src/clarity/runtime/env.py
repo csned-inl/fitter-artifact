@@ -196,8 +196,9 @@ class SysMLEnv:
         elif result.outcome == 'terminal':
             reward, done, outcome = 1.0, True, 'SUCCESS'
         else:
-            reward, done = self._compute_reward(result.state, statuses)
-            outcome = 'SUCCESS' if reward > 0 else 'RUNNING'
+            # A pending decision, even with done=True in its inputs, still
+            # needs its commands applied and checked before terminal success.
+            reward, done, outcome = -0.01, False, 'RUNNING'
         truncated = self._step_count >= self._max_steps and not done
         if truncated:
             reward, done, outcome = 0.0, True, 'TRUNCATED'

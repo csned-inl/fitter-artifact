@@ -88,6 +88,11 @@ def expand_definitions(
 ) -> Expr:
     seen = set(seen or set())
     if isinstance(expr, Var) and expr.name in model.definitions:
+        if expr.name in model.sampled_state:
+            raise ProofDeferred(
+                "CONFLICTING_VALUE_SEMANTICS",
+                f"stored sampled value {expr.name} also has a timeless definition",
+            )
         if expr.name in seen:
             raise ProofDeferred(
                 "UNSUPPORTED_EXPRESSION",

@@ -68,6 +68,22 @@
       "source_path": "src/clarity/models/thermostat/model.sysml",
       "provenance": "restored published input; existing recorded observation scale retained",
       "previous_source_sha256": "6e27d7982c5e0856deb9ce452f513b33057c388a39fe5919e36e31de484b7192"
+    },
+    {
+      "source_sha256": "3fd949d55c97de73946be48f803f982eecbb2fee78e568843d77ef4964403254",
+      "dt": 0.1,
+      "scale": 102.0,
+      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
+      "provenance": "Property-expression correction; unchanged observation layout and recorded scale",
+      "previous_source_sha256": "993d66bfad6f93081dfa9a96e7192294cc674a82ae33314a66753e5e937c8150"
+    },
+    {
+      "source_sha256": "c8830d637e532bdc364ec76c8d2860dd368483c0949dc761427e84b71c7f598e",
+      "dt": 0.1,
+      "scale": 150.0,
+      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
+      "provenance": "Property-expression correction; unchanged observation layout and recorded scale",
+      "previous_source_sha256": "24b70d1c542aea700fc13fdeaabd3230c69bdb4f4c5242d2115f2fedd5463c84"
     }
   ]
 }

@@ -45,6 +45,22 @@ def _symbol_name(run: int | None, role: str, name: str) -> str:
     return f"r{run}::{role}::{name}"
 
 
+def _expression_identity(expr: Expr):
+    # Python considers True == 1 == 1.0. They must not alias typed SMT terms.
+    if isinstance(expr, Const):
+        return ('const', type(expr.value).__name__, repr(expr.value))
+    if isinstance(expr, Var):
+        return ('var', expr.name)
+    if isinstance(expr, RawRef):
+        return ('raw', expr.path)
+    if isinstance(expr, Ite):
+        return ('ite', *(_expression_identity(child) for child in
+                         (expr.cond, expr.then_expr, expr.else_expr)))
+    if isinstance(expr, Op):
+        return ('op', expr.op, tuple(_expression_identity(arg) for arg in expr.args))
+    raise ValueError(f'unsupported expression {type(expr).__name__}')
+
+
 def _var_symbol(
     symbols: dict[tuple[int | None, str, str], Any],
     sort: str,
@@ -248,12 +264,37 @@ def _unsupported_expr(expr: Expr, model: EquationModel, path: str = "") -> list[
         if not out:
             out.append(f"unsupported expression in {here}")
         return out
-    if degree > MAX_SOLVER_POLYNOMIAL_DEGREE:
+    # The encoder retains each arithmetic operation as a named intermediate
+    # equation. Its degree is the degree of that constraint, not the degree
+    # obtained by recursively substituting every earlier equation into it.
+    local_degree = _constraint_degree(expr, model)
+    if local_degree > MAX_SOLVER_POLYNOMIAL_DEGREE:
         out.append(
-            f"polynomial degree {degree} exceeds supported degree "
+            f"constraint polynomial degree {local_degree} exceeds supported degree "
             f"{MAX_SOLVER_POLYNOMIAL_DEGREE} polynomial fragment in {here}"
         )
     return out
+
+
+def _constraint_degree(expr: Expr, model: EquationModel, seen=None) -> int:
+    """Maximum local constraint degree with named intermediate results.
+
+    The separate fragment audit still rejects dynamic division, unsupported
+    operators and recursive definitions. This function never adds assumptions
+    about intermediate values or drops their defining equations.
+    """
+    seen = set(seen or ())
+    if isinstance(expr, Var) and expr.name in model.definitions:
+        if expr.name in seen:
+            return 0  # recursion is rejected by the fragment audit
+        return _constraint_degree(model.definitions[expr.name].expr, model, seen | {expr.name})
+    if isinstance(expr, Ite):
+        return max(1, *(_constraint_degree(child, model, seen)
+                        for child in (expr.cond, expr.then_expr, expr.else_expr)))
+    if isinstance(expr, Op):
+        local = 2 if expr.op == '*' and all(not _is_const_like(a, model) for a in expr.args) else 1
+        return max([local] + [_constraint_degree(arg, model, seen) for arg in expr.args])
+    return 1 if isinstance(expr, Var) and expr.name in model.state | model.actions else 0
 
 
 def _max_polynomial_degree(model: EquationModel, q: set[str]) -> int:
@@ -263,11 +304,7 @@ def _max_polynomial_degree(model: EquationModel, q: set[str]) -> int:
         + list(model.terminals.values())
         + list(model.requirements.values())
     )
-    degrees = []
-    for eq in visible:
-        degree, _reasons = _polynomial_degree(eq.expr, model)
-        if degree is not None:
-            degrees.append(degree)
+    degrees = [_constraint_degree(eq.expr, model) for eq in visible]
     return max(degrees, default=0)
 
 
@@ -285,12 +322,17 @@ def unsupported_reasons(model: EquationModel, q: set[str]) -> list[str]:
 
 
 class Encoder:
-    def __init__(self, model: EquationModel, sorts: dict[str, str]):
+    def __init__(self, model: EquationModel, sorts: dict[str, str], *, compact=False):
         self.model = model
+        # Existing trajectory consumers request expressions directly. Compact
+        # mode is explicit because its constraints must be installed as well.
+        self.compact = compact
         self.sorts = sorts
         self.symbols: dict[tuple[int | None, str, str], Any] = {}
         self.next_cache: dict[tuple[int, str], Any] = {}
         self.definition_cache: dict[tuple[int, str, str], Any] = {}
+        self.intermediate_cache: dict[tuple, Any] = {}
+        self.constraints: list[Any] = []
 
     def sort_of(self, name: str) -> str:
         return self.sorts.get(name, "Real")
@@ -322,6 +364,19 @@ class Encoder:
         return self.definition_cache[key]
 
     def encode_expr(self, expr: Expr, run: int, role: str):
+        """Share a term without expanding its defining arithmetic into callers."""
+        if not self.compact or not isinstance(expr, (Op, Ite)):
+            return self._encode_expr(expr, run, role)
+        key = (run, role, _expression_identity(expr))
+        if key not in self.intermediate_cache:
+            value = self._encode_expr(expr, run, role)
+            symbol = z3.Const(_symbol_name(run, 'intermediate:' + role,
+                                           str(len(self.intermediate_cache))), value.sort())
+            self.intermediate_cache[key] = symbol
+            self.constraints.append(symbol == value)
+        return self.intermediate_cache[key]
+
+    def _encode_expr(self, expr: Expr, run: int, role: str):
         if isinstance(expr, Const):
             if isinstance(expr.value, bool):
                 return z3.BoolVal(expr.value)
@@ -402,14 +457,27 @@ def one_step_transition_closure(
     model: EquationModel,
     q: set[str],
     *,
-    timeout_ms: int = 1000,
+    timeout_ms: int = 30000,
     include_artifacts: bool = False,
+    dt: float | None = None,
 ) -> dict[str, Any]:
     """Check one-step transition closure by self-composition.
 
     Returns ``discharged`` when no two runs can agree on current q/actions while
     disagreeing on next q/observation/terminal/requirement equations.
     """
+
+    if z3 is None:
+        return {'status': 'unavailable', 'reason': 'z3-solver is not installed',
+                'claim': 'not_claimed_by_this_artifact'}
+
+    if model.execution.get('decision_transition'):
+        if dt is None:
+            return {'status': 'unknown', 'reason': 'source_transition_requires_configured_dt',
+                    'claim': 'not_claimed_by_this_artifact'}
+        from .source_solver import check_source_transition_closure
+        return check_source_transition_closure(model, q, dt=dt, timeout_ms=timeout_ms,
+                                               include_artifacts=include_artifacts)
 
     if z3 is None:
         return {
@@ -438,7 +506,7 @@ def one_step_transition_closure(
     logic = "QF_UFNRA" if max_degree > 1 else "QF_UFLRA"
     solver = z3.SolverFor(logic)
     solver.set(timeout=timeout_ms)
-    enc = Encoder(model, sorts)
+    enc = Encoder(model, sorts, compact=True)
 
     equalities = []
     for name in sorted(q):
@@ -470,6 +538,7 @@ def one_step_transition_closure(
 
     if equalities:
         solver.add(z3.And(*equalities))
+    solver.add(*enc.constraints)
     solver.add(z3.Or(*[_neq(left, right) for _label, left, right in disagreements]))
 
     result = solver.check()
@@ -510,6 +579,8 @@ def one_step_transition_closure(
             "solver": "z3",
             "logic": logic,
             "max_polynomial_degree": max_degree,
+            "degree_measure": "maximum degree of individual intermediate constraints",
+            "intermediate_constraints": len(enc.constraints),
             "timeout_ms": timeout_ms,
             "q_size": len(q),
             "actions_size": len(model.actions),

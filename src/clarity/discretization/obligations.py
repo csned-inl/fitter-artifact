@@ -268,7 +268,7 @@ def timing_record(
     dt_record: dict[str, Any],
 ) -> dict[str, Any]:
     sampled = []
-    for fact in mdp_certificate.get("equation_proof", {}).get("facts", []):
+    for fact in (mdp_certificate.get("equation_proof") or {}).get("facts", []):
         if fact.get("rule") != "sampled_memory_bound":
             continue
         detail = fact.get("detail") or {}

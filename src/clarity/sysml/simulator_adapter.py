@@ -57,10 +57,9 @@ class SimulatorTwin:
         if type(inputs[self._completion_name]) is not bool:
             raise ValueError('source Completion input is not Boolean')
         self._model_inputs = dict(inputs)
-        self.engine.record_requirements('decision')
-        if inputs[self._completion_name]:
-            self._publish('terminal', inputs)
-            raise _SimulationStopped
+        # All source safety properties are checked together at cycle_end.
+        # Completion must likewise wait for this final response to be applied.
+        self._terminal_after_response = inputs[self._completion_name]
         self._publish('decision', inputs)
         self._action_ready.wait()
         self._action_ready.clear()
@@ -72,6 +71,9 @@ class SimulatorTwin:
         try:
             while not self._sim_done.is_set():
                 self.engine.step(self._dt)
+                if self._terminal_after_response:
+                    self._publish('terminal', self._model_inputs)
+                    break
         except _SimulationStopped:
             pass
         except Exception as exc:
@@ -99,6 +101,7 @@ class SimulatorTwin:
         self._sim_done.clear()
         self._model_inputs = {}
         self._response = None
+        self._terminal_after_response = False
         self._engine = SimulationEngine(self._parser)
         self._engine.model = self._model_fn
         self._engine.requirement_ledger = RequirementLedger(self._episode_id)
