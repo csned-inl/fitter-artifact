@@ -1,0 +1,116 @@
+{
+  "cruise-controller-model": [
+    {
+      "name": "No Simultaneous Throttle and Brake",
+      "tags": [
+        "Prohibition"
+      ],
+      "subject": "s",
+      "subject_type": "CruiseControlSystem",
+      "expression_text": "not (s.controller.throttleOn and s.controller.brakeOn)"
+    },
+    {
+      "name": "No Throttle When Too Close",
+      "tags": [
+        "Prohibition"
+      ],
+      "subject": "s",
+      "subject_type": "CruiseControlSystem",
+      "expression_text": "s.lastObservedGap < s.controller.safeFollowingDistanceMeters implies not s.controller.throttleOn"
+    },
+    {
+      "name": "No Throttle When Overspeeding",
+      "tags": [
+        "Prohibition"
+      ],
+      "subject": "s",
+      "subject_type": "CruiseControlSystem",
+      "expression_text": "currentTime > 0 implies\n                    (s.lastObservedSpeed > s.controller.targetSpeedMps + s.controller.toleranceMps\n                        implies not s.controller.throttleOn)"
+    },
+    {
+      "name": "Accelerate When Below Target",
+      "tags": [
+        "Obligation"
+      ],
+      "subject": "s",
+      "subject_type": "CruiseControlSystem",
+      "expression_text": "currentTime > 0 implies\n                    (s.lastObservedSpeed < s.controller.targetSpeedMps - s.controller.toleranceMps\n                        and s.lastObservedGap >= s.controller.safeFollowingDistanceMeters\n                        implies s.controller.throttleOn)"
+    },
+    {
+      "name": "Brake When Above Target Or Too Close",
+      "tags": [
+        "Obligation"
+      ],
+      "subject": "s",
+      "subject_type": "CruiseControlSystem",
+      "expression_text": "currentTime > 0 implies\n                    (s.lastObservedSpeed > s.controller.targetSpeedMps + s.controller.toleranceMps\n                        or s.lastObservedGap < s.controller.safeFollowingDistanceMeters\n                        implies s.controller.brakeOn)"
+    }
+  ],
+  "mixing-sysml-model": [
+    {
+      "name": "No Dry Running",
+      "tags": [
+        "Prohibition"
+      ],
+      "subject": "s",
+      "subject_type": "FillingSystem",
+      "expression_text": "(s.controller.observedLevel1 <= 0 implies not s.pump1.isRunning) and\n                (s.controller.observedLevel2 <= 0 implies not s.pump2.isRunning)"
+    },
+    {
+      "name": "No Dead Heading",
+      "tags": [
+        "Prohibition"
+      ],
+      "subject": "s",
+      "subject_type": "FillingSystem",
+      "expression_text": "(not s.valve1.isOpen implies not s.pump1.isRunning) and\n                (not s.valve2.isOpen implies not s.pump2.isRunning)"
+    },
+    {
+      "name": "Fluid Transfer Termination Safety",
+      "tags": [
+        "Obligation"
+      ],
+      "subject": "s",
+      "subject_type": "FillingSystem",
+      "expression_text": "(s.controller.lastScanTimeSeconds > 0) implies\n                ((s.controller.tank1OriginalLevelMl - s.controller.observedLevel1 >= s.controller.tank1TransferMl + s.controller.toleranceMl)\n                  implies not s.pump1.isRunning) and\n                ((s.controller.tank2OriginalLevelMl - s.controller.observedLevel2 >= s.controller.tank2TransferMl + s.controller.toleranceMl)\n                  implies not s.pump2.isRunning)"
+    },
+    {
+      "name": "Fluid Transfer Liveness",
+      "tags": [
+        "Obligation"
+      ],
+      "subject": "s",
+      "subject_type": "FillingSystem",
+      "expression_text": "(s.controller.lastScanTimeSeconds > 0) implies\n                ((s.controller.tank1OriginalLevelMl - s.controller.observedLevel1 < s.controller.tank1TransferMl)\n                    implies (s.valve1.isOpen and s.pump1.isRunning) and\n                  (s.controller.tank2OriginalLevelMl - s.controller.observedLevel2 < s.controller.tank2TransferMl)\n                    implies (s.valve2.isOpen and s.pump2.isRunning))"
+    }
+  ],
+  "thermostat": [
+    {
+      "name": "No Simultaneous Heating and Cooling",
+      "tags": [
+        "Prohibition"
+      ],
+      "subject": "s",
+      "subject_type": "HeatingCoolingSystem",
+      "expression_text": "not (s.controller.heaterOn and s.controller.acOn)"
+    },
+    {
+      "name": "Heat When Cold",
+      "tags": [
+        "Obligation"
+      ],
+      "subject": "s",
+      "subject_type": "HeatingCoolingSystem",
+      "expression_text": "currentTime > 0 implies \n                    (s.lastObservedTemperature < s.controller.setPointCelcius - s.controller.toleranceCelcius\n                        implies s.controller.heaterOn)"
+    },
+    {
+      "name": "Cool When Hot",
+      "tags": [
+        "Obligation"
+      ],
+      "subject": "s",
+      "subject_type": "HeatingCoolingSystem",
+      "expression_text": "currentTime > 0 implies\n                    (s.lastObservedTemperature > s.controller.setPointCelcius + s.controller.toleranceCelcius\n                        implies s.controller.acOn)"
+    }
+  ]
+}

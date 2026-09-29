@@ -1,0 +1,83 @@
+ M docs/SYSML_EXECUTION_CORRESPONDENCE.md
+ M src/clarity/certification/certificate_checker.py
+ M src/clarity/certification/certificate_generation.py
+ M src/clarity/certification/certificate_schema.py
+ M src/clarity/certification/ordered_execution.py
+ M src/clarity/certification/reconstruct.py
+ M src/clarity/certification/sampled_values.py
+ M src/clarity/certification/solver.py
+ M src/clarity/certification/strict_extract.py
+ M src/clarity/discretization/certificates/verification/source_reconstruction.py
+ M src/clarity/discretization/model/proof_rules.py
+ M src/clarity/discretization/obligations.py
+ M src/clarity/models/mixing-sysml-model/model.sysml
+ M src/clarity/runtime/env.py
+ M src/clarity/runtime/normalization.json
+ M src/clarity/sysml/parser.py
+ M src/clarity/sysml/simulator_adapter.py
+ M tests/certification/battery/model_cases.py
+ M tests/certification/battery/mutation_cases.py
+ M tests/certification/battery/solver_cases.py
+ M tests/certification/validate_mixing_contract.py
+ M tests/certification/validate_reference_models.py
+ M tests/training/validate_sysml_safety.py
+?? docs/CHECKED_TYPE_SPECIALIZATION_DESIGN.md
+?? docs/COMPACT_LAZY_IMPLEMENTATION.md
+?? docs/COMPACT_LAZY_PROOF_DESIGN.md
+?? docs/EXTERNAL_VERIFICATION_TOOL_ASSESSMENT.md
+?? docs/PROOF_EFFICIENCY_REVIEW.md
+?? src/clarity/certification/._certificate_checker.py
+?? src/clarity/certification/._decision_transition.py
+?? src/clarity/certification/._ordered_execution.py
+?? src/clarity/certification/compact_transition.py
+?? src/clarity/certification/constant_facts.py
+?? src/clarity/certification/decision_transition.py
+?? src/clarity/certification/execution_equations.py
+?? src/clarity/certification/lazy_backend.py
+?? src/clarity/certification/lazy_congruence.py
+?? src/clarity/certification/lazy_constraints.py
+?? src/clarity/certification/lazy_control.py
+?? src/clarity/certification/lazy_expressions.py
+?? src/clarity/certification/lazy_graph.py
+?? src/clarity/certification/lazy_invocations.py
+?? src/clarity/certification/lazy_message_operations.py
+?? src/clarity/certification/lazy_messages.py
+?? src/clarity/certification/lazy_program.py
+?? src/clarity/certification/lazy_scalar_store.py
+?? src/clarity/certification/lazy_solver.py
+?? src/clarity/certification/lazy_specialization.py
+?? src/clarity/certification/lazy_storage.py
+?? src/clarity/certification/lazy_substitution.py
+?? src/clarity/certification/source_buffer.py
+?? src/clarity/certification/source_history.py
+?? src/clarity/certification/source_layout.py
+?? src/clarity/certification/source_relation.py
+?? src/clarity/certification/source_solver.py
+?? src/clarity/certification/symbolic_execution.py
+?? src/clarity/certification/transition_equations.py
+?? src/clarity/certification/type_facts.py
+?? tests/certification/check_lazy_backend.py
+?? tests/certification/check_source_obligation.py
+?? tests/certification/measure_type_facts.py
+?? tests/certification/source_equation_fixture.py
+?? tests/certification/validate_call_composition.py
+?? tests/certification/validate_compact_transition.py
+?? tests/certification/validate_constant_facts.py
+?? tests/certification/validate_decision_transition.py
+?? tests/certification/validate_execution_equations.py
+?? tests/certification/validate_lazy_expressions.py
+?? tests/certification/validate_lazy_graph.py
+?? tests/certification/validate_lazy_messages.py
+?? tests/certification/validate_lazy_program.py
+?? tests/certification/validate_lazy_solver.py
+?? tests/certification/validate_lazy_source_operations.py
+?? tests/certification/validate_lazy_specialization.py
+?? tests/certification/validate_lazy_substitution.py
+?? tests/certification/validate_source_buffer.py
+?? tests/certification/validate_source_history.py
+?? tests/certification/validate_type_facts.py
+?? tests/run_workstation_validation.py
+?? tests/training/validate_response_timing.py
+?? tests/training/validate_source_equation_replay.py
+?? tests/validate_workstation_batch.py
+?? tests/workstation_test_matrix.json

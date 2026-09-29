@@ -1,0 +1,8 @@
+outputs/
+results/
+build/
+*.egg-info/
+.venv/
+__pycache__/
+*.pyc
+fitter_artifact_overleaf.zip

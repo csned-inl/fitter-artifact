@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Evaluate the action read from one SysML neural requirement."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import resource
+import time
+from pathlib import Path
+from typing import Any
+
+from clarity.runtime.env import SysMLEnv
+from clarity.runtime.oracle import extract_interface, spec_oracle
+from clarity.sysml.inputs import inspect_sysml
+from clarity.sysml.runtime_settings import DEFAULT_DT, validate_dt
+
+
+def _observation(raw: dict[str, Any], names: list[str]) -> dict[str, float | bool]:
+    return {
+        name: raw[name]
+        for name in names
+    }
+
+
+def evaluate(model_path: Path, episodes: int, seed: int, dt: float,
+             max_steps: int, observation_scale=None) -> dict[str, Any]:
+    dt = validate_dt(dt)
+    model = inspect_sysml(model_path)
+    base = {
+        "model": model.key,
+        "model_name": model.name,
+        "model_path": str(model.path),
+        "model_sha256": model.sha256,
+        "action_kind": model.action_kind,
+        "dt": dt,
+        "method": "action extracted from #NeuralRequirement",
+        "learned_params": 0,
+        "recurrent_state": False,
+    }
+    if model.action_kind != "discrete":
+        return {
+            **base,
+            "status": "requirement_defines_allowed_real_values_not_one_action",
+            "episodes": 0,
+        }
+
+    started = time.time()
+    interface = extract_interface(str(model.path))
+    shield = interface["spec_shield"]
+    observation_names = list(interface["obs_names"])
+    env = SysMLEnv(
+        str(model.path), dt=dt, max_steps=max_steps, phase=2, rng_seed=seed, observation_scale=observation_scale
+    )
+    counts = {
+        "episodes": 0,
+        "successes": 0,
+        "safety_violations": 0,
+        "evaluation_errors": 0,
+        "truncations": 0,
+        "steps": 0,
+        "overrides": 0,
+        "pointwise_checks": 0,
+        "pointwise_failures": 0,
+    }
+    execution_errors = []
+    checks = {}
+    failures = {}
+    try:
+        for episode in range(episodes):
+            initial = env.reset_with_result(seed=seed + episode)
+            done = initial.outcome != "decision"
+            last_reward = 0.0
+            failed_properties: set[str] = set(initial.violations)
+            error_episode = initial.outcome == 'error'
+            for name, entry in initial.statuses.items():
+                checks[name] = checks.get(name, 0) + entry['checks']
+            if initial.outcome == 'terminal':
+                last_reward = 1.0
+            while not done:
+                try:
+                    obs = _observation(env.model_inputs, observation_names)
+                    action = int(spec_oracle(shield, obs))
+                    executed = int(shield(action, obs))
+                except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    error_episode = True
+                    execution_errors.append({'episode': episode, 'error': str(exc),
+                                             'inputs': env.model_inputs})
+                    break
+                counts["pointwise_checks"] += 1
+                if executed != action:
+                    counts["pointwise_failures"] += 1
+                    counts["overrides"] += 1
+                _next_obs, reward, done, info = env.step(executed)
+                for name, entry in info["statuses"].items():
+                    checks[name] = checks.get(name, 0) + entry.get("checks", 1)
+                    if not entry["status"]:
+                        failed_properties.add(name)
+                error_episode |= info.get("outcome") == "ERROR"
+                counts["steps"] += 1
+                last_reward = float(reward)
+
+            counts["episodes"] += 1
+            counts["evaluation_errors"] += int(error_episode)
+            if failed_properties:
+                counts["safety_violations"] += 1
+            for name in failed_properties:
+                failures[name] = failures.get(name, 0) + 1
+            if error_episode or initial.outcome == "violation":
+                continue
+            if last_reward > 0:
+                counts["successes"] += 1
+            elif last_reward == 0:
+                counts["truncations"] += 1
+    finally:
+        env.close()
+
+    episode_count = max(counts["episodes"], 1)
+    step_count = max(counts["steps"], 1)
+    check_count = max(counts["pointwise_checks"], 1)
+    return {
+        **base,
+        **counts,
+        "execution_errors": execution_errors,
+        "requirement_checks": checks,
+        "requirement_violation_episodes": failures,
+        "status": "evaluated",
+        "success_rate": counts["successes"] / episode_count,
+        "safety_violation_rate": counts["safety_violations"] / episode_count,
+        "evaluation_error_rate": counts["evaluation_errors"] / episode_count,
+        "truncation_rate": counts["truncations"] / episode_count,
+        "override_rate": counts["overrides"] / step_count,
+        "pointwise_agreement": 1.0 - counts["pointwise_failures"] / check_count,
+        "mean_episode_steps": counts["steps"] / episode_count,
+        "seconds": time.time() - started,
+        "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("model")
+    parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--dt", type=validate_dt, default=DEFAULT_DT)
+    parser.add_argument("--max-steps", type=int, default=5000)
+    parser.add_argument("--out-json", required=True)
+    args = parser.parse_args()
+
+    report = evaluate(
+        Path(args.model).resolve(), args.episodes, args.seed, args.dt, args.max_steps
+    )
+    out = Path(args.out_json).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

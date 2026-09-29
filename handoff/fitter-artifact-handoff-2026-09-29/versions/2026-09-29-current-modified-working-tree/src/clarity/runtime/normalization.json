@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "source_sha256": "0edcd8b89f1cf5b79d06b3fda3d4652da4337dad045e133ccab7bf1f63f757aa",
+      "dt": 0.1,
+      "scale": 102.0,
+      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
+      "provenance": "pre-integration normalization; preserved without replaying initialization"
+    },
+    {
+      "source_sha256": "b6cb079e68e0c8453f16e83d9510d715651f54b62249d8b9253fc131675a7a5b",
+      "dt": 0.1,
+      "scale": 150.0,
+      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
+      "provenance": "pre-integration normalization; preserved without replaying initialization"
+    },
+    {
+      "source_sha256": "6e27d7982c5e0856deb9ce452f513b33057c388a39fe5919e36e31de484b7192",
+      "dt": 0.1,
+      "scale": 23.899216417910445,
+      "source_path": "src/clarity/models/thermostat/model.sysml",
+      "provenance": "pre-integration normalization; preserved without replaying initialization"
+    },
+    {
+      "source_sha256": "2b8a3163c3d846a8576c950c33e403cbdf9f0b7422af1458dc2a9e52b0a7956f",
+      "dt": 0.1,
+      "scale": 1.0,
+      "source_path": "tests/discretization/fixtures/held_constant.sysml",
+      "provenance": "constant-one test fixture"
+    },
+    {
+      "source_sha256": "c4576a6ce0a9de241c7cf0231149b69da87f4a6af0844f27c83394ba0cebb850",
+      "dt": 0.1,
+      "scale": 102.0,
+      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
+      "provenance": "approved source correction; same observation layout and pre-integration scale",
+      "previous_source_sha256": "0edcd8b89f1cf5b79d06b3fda3d4652da4337dad045e133ccab7bf1f63f757aa"
+    },
+    {
+      "source_sha256": "e8217dffa82f32e275b52efe5559fee6b01de465859db857aa9350e994cf3f24",
+      "dt": 0.1,
+      "scale": 150.0,
+      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
+      "provenance": "approved source correction; same observation layout and pre-integration scale",
+      "previous_source_sha256": "b6cb079e68e0c8453f16e83d9510d715651f54b62249d8b9253fc131675a7a5b"
+    },
+    {
+      "source_sha256": "993d66bfad6f93081dfa9a96e7192294cc674a82ae33314a66753e5e937c8150",
+      "dt": 0.1,
+      "scale": 102.0,
+      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
+      "provenance": "restored published input; existing recorded observation scale retained",
+      "previous_source_sha256": "0edcd8b89f1cf5b79d06b3fda3d4652da4337dad045e133ccab7bf1f63f757aa"
+    },
+    {
+      "source_sha256": "24b70d1c542aea700fc13fdeaabd3230c69bdb4f4c5242d2115f2fedd5463c84",
+      "dt": 0.1,
+      "scale": 150.0,
+      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
+      "provenance": "restored published input; existing recorded observation scale retained",
+      "previous_source_sha256": "b6cb079e68e0c8453f16e83d9510d715651f54b62249d8b9253fc131675a7a5b"
+    },
+    {
+      "source_sha256": "44dec2333511c5cf7a40ad1828b612a043f9c7c71f6b960c276ce866f4a521aa",
+      "dt": 0.1,
+      "scale": 23.899216417910445,
+      "source_path": "src/clarity/models/thermostat/model.sysml",
+      "provenance": "restored published input; existing recorded observation scale retained",
+      "previous_source_sha256": "6e27d7982c5e0856deb9ce452f513b33057c388a39fe5919e36e31de484b7192"
+    },
+    {
+      "source_sha256": "3fd949d55c97de73946be48f803f982eecbb2fee78e568843d77ef4964403254",
+      "dt": 0.1,
+      "scale": 102.0,
+      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
+      "provenance": "Property-expression correction; unchanged observation layout and recorded scale",
+      "previous_source_sha256": "993d66bfad6f93081dfa9a96e7192294cc674a82ae33314a66753e5e937c8150"
+    },
+    {
+      "source_sha256": "c8830d637e532bdc364ec76c8d2860dd368483c0949dc761427e84b71c7f598e",
+      "dt": 0.1,
+      "scale": 150.0,
+      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
+      "provenance": "Property-expression correction; unchanged observation layout and recorded scale",
+      "previous_source_sha256": "24b70d1c542aea700fc13fdeaabd3230c69bdb4f4c5242d2115f2fedd5463c84"
+    }
+  ]
+}

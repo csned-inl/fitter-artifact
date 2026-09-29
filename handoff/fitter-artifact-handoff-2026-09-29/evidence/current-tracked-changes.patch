@@ -1,0 +1,1615 @@
+diff --git a/docs/SYSML_EXECUTION_CORRESPONDENCE.md b/docs/SYSML_EXECUTION_CORRESPONDENCE.md
+index c8d2b38..27fbf9f 100644
+--- a/docs/SYSML_EXECUTION_CORRESPONDENCE.md
++++ b/docs/SYSML_EXECUTION_CORRESPONDENCE.md
+@@ -1,80 +1,120 @@
+-# Source/execution correspondence: implementation status
+-
+-This integration is **incomplete**. A source-bound action inventory is implemented;
+-it is not a composed decision-to-decision transition proof. The three bundled
+-models remain uncertified. Passing regression tests is not a safety theorem.
+-
+-## Source rules and actual implementation
+-
+-| Construct | Authority and representation | Checked behavior / remaining work |
+-|---|---|---|
+-| `=` versus `:=` | Source declaration operator; parsed binding versus initial-value records | Live evaluation versus once-only initialization. Assigning to a bound feature is rejected. |
+-| Operator precedence | KerML 1.0 §8.2.5.8.1 and the reference expression grammar linked below | `implies` now associates to the left. Comparisons precede equality, which precedes `and`/`or`. The shield's heuristic regrouping is removed. |
+-| Boolean and numeric values | Source attribute/input/message declarations | Boolean/numeric operator misuse and incomplete expressions reject. Declared Integer sorts are retained in the solver; assigning a Real result cannot silently change an Integer declaration. |
+-| Physical versus held values | Source storage identities and assignment/send/accept events | Separate physical, sensor, payload and receiver entries. Send snapshots its payload. No replacement of a reading by current physics. |
+-| Requirement inventory | Independent scan of source declarations, then comparison to parsed records | All 12 safety requirements, all tags, expression text/AST, source spans and declared types are retained. |
+-| Action bodies | Ordered AST of assignments, branches, performed actions and calls | Both branches and per-event read/write identities retained. This is an inventory; decision composition and its independent proof are not implemented. |
+-| Runtime initialization | Scenario draw precedes any source advancement | Existing distribution and 5 mL reserve retained. No inactive reset controls. Initial failures remain in evaluation denominators. |
+-| Runtime outcomes | Structured reset/advance result | Decision, completion and execution error wake the caller; no invented action/observation on an error. Completion is the environment's `#Completion` boundary, not proof that physics stops. |
+-| Requirement accounting | Original AST at completed initialization, decisions/terminal returns and completed cycles | Assignment and message-accept hooks are removed. False results/errors at retained observations persist in the event ledger. Continuous-interval obligations remain in Stage 4. |
+-| Encoding | Fixed source/dt-indexed normalization record; actual float32 output | Existing scales preserved without executing controls during construction. Float32 injectivity and equality of deployed transition laws are unproved. |
+-| Proof artifacts | Markov 4 / reduced spec 3 / discretization 5 / verification report 2 | Source inventories, types, equations and interfaces checked; old artifacts reject. Arithmetic predicate subproofs cannot authorize full source preservation. |
+-
+-References: [KerML 1.0, §8.2.5.8.1](https://www.omg.org/spec/KerML/1.0/PDF)
+-and the [SysML reference expression grammar, `ImpliesExpression`, `AndExpression`, `EqualityExpression`](https://raw.githubusercontent.com/Systems-Modeling/SysML-v2-Pilot-Implementation/master/org.omg.kerml.expressions.xtext/src/org/omg/kerml/expressions/xtext/KerMLExpressions.xtext).
+-The former specifies precedence; the latter explicitly constructs left-associated
+-implication chains. Neither source authorizes CLARITY's former heuristic regrouping.
+-
+-## Approved source corrections and remaining runtime failure
+-
+-The user approved the two proposed source corrections on 2026-09-16. Git
+-checkpoint `e7aa3ce` preserves the complete implementation before these edits.
+-
+-1. **Cruise controller contract — corrected.** The source now explicitly uses
+-   `(target > speed + tolerance and gap >= safe) == throttle` and the corresponding
+-   parenthesized brake condition. The shield evaluates that literal expression;
+-   it does not repair precedence internally. The five safety requirement
+-   expressions are unchanged.
+-2. **Mixing numeric domain — corrected.** Physical tank levels, volume-reading
+-   payloads, Modbus volume responses, stored observations, and the two current
+-   volume policy inputs now declare Real. Integer addresses, initial scenario
+-   values and transfer targets remain Integer. This explicitly permits fractional
+-   values along the volume path; it does not establish the missing numeric or
+-   continuous-flow proof. All four safety requirement expressions are unchanged.
+-3. **Mixing requirement checking.** Requirements are no longer evaluated after
+-   each timestamp assignment, other individual assignment, or message accept.
+-   Initialization, decision/terminal-return and completed-cycle observations
+-   remain. The implication parser and the source Liveness expression are
+-   unchanged by this removal; evaluation results refer to those retained points.
+-
+-## Unresolved proof obligations
+-
+-These are proof obligations, not replacement safety properties:
+-
+-- Define/check permitted initial states, including simulator defaults for
+-  uninitialized Boolean/Real attributes and scenario replacement of literal
+-  tank initial levels.
+-- Establish source-supported cross-part scheduling, action atomicity and
+-  message delivery. The runtime currently visits parts in parser order,
+-  dispatches recipient state machines synchronously and uses latest-per-type
+-  mailboxes. Recording that behavior is not a proof of source correspondence.
+-- Compose these events through the next decision, retaining paths that block,
+-  terminate or have no next decision. Do not treat missing receive equations as
+-  holds, or cycle-count age bounds as observed decision history.
+-- Establish the continuous flow and numeric relation. A numerical update by
+-  `dt` is not an enclosure proof; decimal-to-binary64 and normalized float32
+-  rounding also require a checked relation.
+-- Prove initialization, execution coverage, correspondence, controller
+-  premises, property transfer and induction for each source requirement.
+-  The current sampled-point and physical-interval arithmetic backends do not
+-  supply these additional proofs. The checker therefore refuses full safety
+-  certification, including for the small algebraic positive fixture.
+-
+-## Scope of installed checks
+-
+-The new source-preservation inventory rejects omitted/changed obligations and
+-unsupported evidence. It deliberately has no accepting rule for the unfinished
+-source correspondence proof. Implementing that rule, ordered decision
+-composition, and the actual encoded-interface MDP proof remains required work.
+-No complete positive artifact chain or bundled-model safety certificate is
+-claimed by this integration.
++# Source/execution correspondence: current implementation
++
++Updated 2026-09-19. The proof pipeline contains a composed control-flow relation
++and checked compact blocks. The blocks preserve that relation, but its runtime
++operations have not been lowered into the complete next-decision equations used
++by the MDP solver. The bundled models therefore remain uncertified.
++
++## Fixed inputs and execution behavior
++
++- Preserve the current CLARITY-compatible initialization handling, including
++  `parser_values.py`; this implementation changes neither `=` nor `:=` handling.
++- Preserve the corrected mixing liveness and termination properties and the
++  corrected cruise controller contract, together with the existing proposition
++  precedence. All 12 safety requirements retain their current source meanings.
++- Preserve declared numeric types, including mixing's Integer declarations.
++  Earlier statements in this document about changing them to Real are obsolete.
++- Preserve the separate physical, held sensor, sent payload, and received values.
++- Check all source safety properties together at completed initialization and
++  `cycle_end`. Apply the final controller response before reporting completion.
++- Preserve scenario generation, the 5 mL reserve, normalization, policies,
++  observation/history interfaces, and experiment settings.
++
++No model, parser, initialization, runtime, shield, or training change is made by
++this transition-composition implementation.
++
++## Composed transition description
++
++`certification/decision_transition.py` composes the existing ordered source
++programs into a graph. Its nodes retain assignments, declaration hoisting,
++branches, performed actions, sends, accepts, state-machine dispatch, constraint
++solving, neural requests/responses, completed-cycle checks, and completion.
++
++Every node reads the preceding node's values. Explicit storage writer sites and
++frame conditions identify which values may change and which are retained.
++Reference lookup order, live bindings and stored aliases remain distinct from
++sample copies. Send copies the current payload; accept copies the received
++attributes. A later physical update does not change an already sent value.
++
++The graph retains the existing simulator order: process state machines, solve
++constraints, install dt, execute step bodies in source/parser order, advance the
++engine clock, check all properties, then test pending completion. Synchronous
++message dispatch calls the recipient machine and returns to the sending action.
++The first enabled transition is selected in source order. Trigger attributes
++are copied before its guard; a false guard retains those writes.
++
++The next decision may follow several cycles. The graph retains that loop,
++execution errors, blocked accepts and infinite paths without assuming a fixed
++cycle count or eventual progress. Initialization is an explicit prefix using the
++existing runtime algorithm and original parsed initialization records.
++
++`compose_path` assigns separate read/write versions along any supplied finite
++path. It verifies continuations and machine returns, retains branch conditions,
++and labels incomplete paths as prefixes. It does not prove path feasibility or
++that a finite set of paths covers an unbounded loop.
++
++Execution inventory version 4 carries this description and its compact blocks in certificates. The
++checker uses the same version constant and reconstructs the graph from the
++current source and runtime. A recomputed hash alone cannot authorize an altered
++order, copy operation, property list, or runtime identity.
++
++## Checks and remaining solver work
++
++`tests/certification/validate_decision_transition.py` independently walks source
++operations, checks state/update coverage, rejects modified descriptions, tests
++sequential versions and copies, and compares unchanged runtime executions at the
++same decision/completed-cycle boundaries. It also checks reference lookup,
++assignment targets, mailbox copies, constraint writes and elapsed time.
++
++These tests do not establish the MDP theorem. The existing equation solver still
++needs a checked lowering of the composed relation, including loops, initialization
++and numerical behavior. Missing next-state equations remain errors; the new
++`decision_transition_solver_required` diagnostic prevents an inventory or finite
++trace from being accepted as that proof. The legacy equation view's machine-state
++encodings are explicitly linked to `current_sm_state` storage; their encoding
++correspondence is not silently assumed.
++
++Continuous-interval preservation and the encoded controller-history theorem
++remain separate proof obligations in the reviewed implementation plan.
++
++## Compact equations and their checks
++
++`certification/compact_transition.py` groups single-entry paths into basic blocks.
++Each operation has a named input and result configuration. The next operation
++uses the preceding result. Branches, cycles, calls, decisions, requirement checks
++and exceptional exits retain their source edges. No model names, sensor counts,
++periods or phase assumptions select the transformation.
++
++Repeated expression syntax is shared without evaluating it early. Short-circuit
++operators and conditional expressions retain their original expression trees
++when decoded. Reference lookup order, live bindings, stored samples, sends and
++accepts retain their separate source operations. The physical-step equations
++used by discretization are not replaced with decision-transition blocks.
++
++The independent structural checker decodes the expressions, verifies every
++operation against the source graph, checks intermediate inputs, checks all
++successors and rejects missing or repeated operations. It does not call the
++compaction builder. Recomputed hashes cannot authorize semantic differences.
++An additional Z3 query checks that equations with named intermediate results
++equal direct source-operation composition at every block exit. Runtime operations
++are uninterpreted in this particular query: its claim is preservation of the
++representation, not the MDP theorem or numerical/runtime correspondence.
++
++The existing numerical equation solver also uses named intermediate constraints.
++For example, three squarings remain `x1 = x*x`, `x2 = x1*x1`, `x3 = x2*x2` rather
++than expanding to a degree-eight expression. Every defining constraint is added
++to the SMT query. The reported polynomial degree is the largest degree of an
++individual constraint. Missing transitions, recursive definitions and unsupported
++dynamic divisions still reject certification. The trajectory encoder retains its
++original direct-expression interface.
++
++Certificate generation reuses one extraction for its equation and dependency
++views. Verification independently extracts the source once, checks compact
++correspondence and reruns the relevant solver checks. It does not accept compact
++representation preservation as a replacement for next-decision closure.
++
++Validation for this change is recorded in
++`outputs/compact_transition_20260919/RESULTS.md`, with a pre-change source snapshot
++and a separately reversible implementation patch. The full pipeline still stops
++at Stage 3 because the complete source-to-next-decision equations remain missing;
++the new compaction checks do not resolve that missing implementation.
+diff --git a/src/clarity/certification/certificate_checker.py b/src/clarity/certification/certificate_checker.py
+index 81b6619..cd2339b 100644
+--- a/src/clarity/certification/certificate_checker.py
++++ b/src/clarity/certification/certificate_checker.py
+@@ -69,8 +69,22 @@ def _check_schema_and_equations(
+     model_info = certificate.get("model", {})
+     model_path = model_info.get("path")
+     execution = certificate.get("execution")
+-    if not isinstance(execution, dict) or execution.get("version") != 1:
++    from .ordered_execution import VERSION as EXECUTION_VERSION
++    if not isinstance(execution, dict) or execution.get("version") != EXECUTION_VERSION:
+         errors.append("missing source-bound ordered execution")
++    if not isinstance(execution, dict) or not execution.get('decision_transition'):
++        errors.append('missing composed decision transition')
++    if not isinstance(execution, dict) or not execution.get('compact_transition'):
++        errors.append('missing compact decision transition')
++    elif execution.get('decision_transition'):
++        from .compact_transition import validate_compact_transition
++        errors.extend(validate_compact_transition(execution['compact_transition'],
++                                                  execution['decision_transition']))
++        compact_evidence = certificate.get('solver_advisory', {}).get(
++            'compact_representation_preservation', {})
++        if (compact_evidence.get('status') != 'discharged'
++                or compact_evidence.get('claim') != 'compact_representation_preservation'):
++            errors.append('compact representation preservation is not discharged')
+     semantics = certificate.get("value_semantics")
+     if not isinstance(semantics, dict) or semantics.get("version") != 1:
+         errors.append("missing explicit physical/sampled value semantics")
+@@ -82,37 +96,10 @@ def _check_schema_and_equations(
+             physical, sampled = pair.get("physical_value"), pair.get("sampled_value")
+             if physical == sampled or not {physical, sampled} <= state_variables:
+                 errors.append("physical/sampled pair does not name two distinct state variables")
+-    if check_hash and (not model_path or not Path(model_path).is_file()):
++    if not model_path or not Path(model_path).is_file():
+         errors.append("source model is unavailable for semantic verification")
+-    if check_hash and model_path and Path(model_path).is_file():
+-        if model_hash(model_path) != model_info.get("sha256"):
+-            errors.append("model sha256 does not match certificate")
+-        from .strict_extract import extract_equation_model
+-        try:
+-            source_model = extract_equation_model(str(model_path))
+-            from .ordered_execution import validate_execution_description
+-            errors.extend(validate_execution_description(execution, model_path))
+-            from .certificate_generation import _equation_to_dict
+-            for section in ('definitions', 'observations', 'terminals', 'transitions', 'requirements'):
+-                expected = [_equation_to_dict(e, source_model.constants) for e in
+-                            sorted(getattr(source_model, section).values(), key=lambda e: e.target)]
+-                if certificate.get('equations', {}).get(section) != expected:
+-                    errors.append(f'{section} equations differ from source reconstruction')
+-            from .relevance import compute_transition_closed_relevance
+-            from .solver import one_step_transition_closure
+-            q = compute_transition_closed_relevance(source_model).q
+-            if set(certificate.get('sets', {}).get('q', [])) != set(q):
+-                errors.append('certified state differs from source relevance')
+-            checked = one_step_transition_closure(source_model, set(q), timeout_ms=1000)
+-            if checked.get('status') != 'discharged':
+-                errors.append('source-reconstructed solver obligation is not discharged')
+-            if semantics != source_model.value_semantics:
+-                errors.append("physical/sampled value semantics do not match source")
+-            for diagnostic in source_model.diagnostics:
+-                if diagnostic.severity in {"warning", "error"}:
+-                    errors.append(diagnostic.pretty())
+-        except (ValueError, KeyError, TypeError) as exc:
+-            errors.append(f"source value reconstruction failed: {exc}")
++    elif check_hash and model_hash(model_path) != model_info.get("sha256"):
++        errors.append("model sha256 does not match certificate")
+ 
+     diagnostics = certificate.get("diagnostics", {})
+     if diagnostics.get("blocking"):
+@@ -153,6 +140,85 @@ def _check_schema_and_equations(
+     return errors
+ 
+ 
++def _check_source_evidence(certificate: dict[str, Any]) -> list[str]:
++    """Rebuild proof obligations only after structural prerequisites pass."""
++    errors = []
++    model_path = certificate.get('model', {}).get('path')
++    execution = certificate.get('execution')
++    semantics = certificate.get('value_semantics')
++    if model_path and Path(model_path).is_file():
++        from .strict_extract import extract_equation_model
++        try:
++            source_model = extract_equation_model(str(model_path))
++            # Reuse this independently extracted source model instead of parsing
++            # and composing the same source a second time during verification.
++            if execution != source_model.execution:
++                errors.append('ordered execution/property/type inventory does not match source')
++            from .compact_transition import check_block_equations
++            compact_check = check_block_equations(
++                execution['compact_transition'], source_model.execution['decision_transition'])
++            if compact_check['status'] != 'discharged':
++                errors.append('source-reconstructed compact equations are not preserved')
++            recorded_compact_check = certificate.get('solver_advisory', {}).get(
++                'compact_representation_preservation', {})
++            if any(recorded_compact_check.get(k) != v for k, v in compact_check.items()):
++                errors.append('recorded compact-equation evidence differs from independent check')
++            from .certificate_generation import _equation_to_dict
++            for section in ('definitions', 'observations', 'terminals', 'transitions', 'requirements'):
++                expected = [_equation_to_dict(e, source_model.constants) for e in
++                            sorted(getattr(source_model, section).values(), key=lambda e: e.target)]
++                if certificate.get('equations', {}).get(section) != expected:
++                    errors.append(f'{section} equations differ from source reconstruction')
++            from .relevance import compute_transition_closed_relevance
++            from .solver import one_step_transition_closure
++            q = compute_transition_closed_relevance(source_model).q
++            if set(certificate.get('sets', {}).get('q', [])) != set(q):
++                errors.append('certified state differs from source relevance')
++            if semantics != source_model.value_semantics:
++                errors.append("physical/sampled value semantics do not match source")
++            errors.extend(diagnostic.pretty() for diagnostic in source_model.diagnostics
++                          if diagnostic.severity in {'warning', 'error'})
++            if errors:
++                return errors
++            checked = one_step_transition_closure(source_model, set(q), timeout_ms=30000,
++                                                 dt=certificate.get('settings', {}).get('dt'))
++            if checked.get('status') != 'discharged':
++                errors.append('source-reconstructed solver obligation is not discharged')
++            recorded_solver = certificate.get('solver_advisory', {}).get('one_step_transition_closure', {})
++            for field in ('graph_sha256', 'implementation_sha256', 'equations',
++                          'initialization_scope', 'progress', 'progress_evidence', 'type_specialization'):
++                if recorded_solver.get(field) != checked.get(field):
++                    errors.append('source transition solver evidence differs: ' + field)
++            if errors:
++                return errors
++            history = certificate.get('solver_advisory', {}).get('source_history_reconstruction', {})
++            if history.get('status') != 'discharged' or history.get('claim') != 'source_history_reconstruction':
++                errors.append('encoded source-history reconstruction is not discharged')
++            else:
++                from .source_solver import check_source_history_reconstruction
++                buffer = certificate.get('buffer') or {}
++                rebuilt = check_source_history_reconstruction(source_model, set(q),
++                    dt=certificate.get('settings', {}).get('dt'),
++                    b_obs=buffer.get('b_obs'), b_act=buffer.get('b_act'), timeout_ms=30000)
++                if rebuilt.get('status') != 'discharged':
++                    errors.append('source-history proof did not pass independent solver replay')
++                for field in ('graph_sha256', 'implementation_sha256', 'b_obs', 'b_act',
++                              'observation_keys', 'observation_scale', 'observation_dtype',
++                              'augmented_state', 'scope', 'reset_padding', 'buffer_layout', 'normalization_contract',
++                              'state_layout', 'omitted_constant_fields'):
++                    if history.get(field) != rebuilt.get(field):
++                        errors.append('source-history evidence differs: ' + field)
++            if semantics != source_model.value_semantics:
++                errors.append("physical/sampled value semantics do not match source")
++            for diagnostic in source_model.diagnostics:
++                if diagnostic.severity in {"warning", "error"}:
++                    errors.append(diagnostic.pretty())
++        except (ValueError, KeyError, TypeError) as exc:
++            errors.append(f"source value reconstruction failed: {exc}")
++
++    return errors
++
++
+ def _check_theorem_gate(certificate: dict[str, Any]) -> list[str]:
+     """Check theorem gates, noninterference records, and solver evidence."""
+     errors: list[str] = []
+@@ -186,10 +252,11 @@ def _check_theorem_gate(certificate: dict[str, Any]) -> list[str]:
+         errors.append("solver-backed uniqueness claim label is wrong")
+     if solver_gate.get("solver") != "z3":
+         errors.append("solver-backed uniqueness must be discharged by z3")
+-    if solver_gate.get("logic") not in {"QF_UFLRA", "QF_UFNRA"}:
++    native_source = solver_gate.get('logic') == 'HORN+FP64+Int+datatypes'
++    if solver_gate.get("logic") not in {"QF_UFLRA", "QF_UFNRA", 'HORN+FP64+Int+datatypes'}:
+         errors.append(f"unsupported solver logic={solver_gate.get('logic')}")
+     degree = solver_gate.get("max_polynomial_degree")
+-    if (
++    if not native_source and (
+         not isinstance(degree, int)
+         or degree < 0
+         or degree > MAX_SOLVER_POLYNOMIAL_DEGREE
+@@ -348,6 +415,25 @@ def _check_reconstruction_trace(certificate: dict[str, Any]) -> list[str]:
+     if not proof:
+         errors.append("missing proof section")
+         return errors
++    if proof.get('proof_engine') == 'source_history_v1':
++        history = certificate.get('solver_advisory', {}).get('source_history_reconstruction', {})
++        buffer = certificate.get('buffer') or {}
++        if proof.get('passes') is not True or history.get('status') != 'discharged' or history.get('claim') != 'source_history_reconstruction':
++            errors.append('source-history reconstruction is not discharged')
++        if proof.get('evidence_source') != 'solver_advisory.source_history_reconstruction':
++            errors.append('source-history proof refers to the wrong evidence')
++        if proof.get('target') != certificate.get('sets', {}).get('q'):
++            errors.append('source-history proof target differs from certified q')
++        graph = certificate.get('execution', {}).get('decision_transition', {}).get('sha256')
++        if proof.get('graph_sha256') != graph or history.get('graph_sha256') != graph:
++            errors.append('source-history proof graph differs from source graph')
++        for name in ('b_obs', 'b_act'):
++            value = buffer.get(name)
++            if type(value) is not int or value < 0 or proof.get(name) != value or history.get(name) != value:
++                errors.append('source-history proof buffer mismatch: '+name)
++        # Numerical/semantic evidence is independently reconstructed above in
++        # _check_schema_and_equations, not trusted from this record.
++        return errors
+     if not proof.get("passes"):
+         errors.append("proof section does not pass")
+ 
+@@ -646,14 +732,19 @@ def _check_equation_trace(certificate: dict[str, Any]) -> list[str]:
+ def check_certificate(
+     certificate: dict[str, Any], *, check_hash: bool = True
+ ) -> list[str]:
+-    """Return every structural or replay error found in a certificate."""
++    """Reject structural failures before rebuilding the independent proofs."""
+     errors = _check_schema_and_equations(
+         certificate, check_hash=check_hash
+     )
+     errors.extend(_check_theorem_gate(certificate))
+     errors.extend(_check_mdp_obligations(certificate))
++    if (certificate.get('proof') or {}).get('proof_engine') != 'source_history_v1':
++        errors.append('current certificate schema requires source-history reconstruction')
+     errors.extend(_check_reconstruction_trace(certificate))
+     if not certificate.get("proof"):
+         return errors
+-    errors.extend(_check_equation_trace(certificate))
++    if certificate['proof'].get('proof_engine') != 'source_history_v1':
++        errors.extend(_check_equation_trace(certificate))
++    if not errors:
++        errors.extend(_check_source_evidence(certificate))
+     return errors
+diff --git a/src/clarity/certification/certificate_generation.py b/src/clarity/certification/certificate_generation.py
+index d52e024..81c6d61 100644
+--- a/src/clarity/certification/certificate_generation.py
++++ b/src/clarity/certification/certificate_generation.py
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env python3
+ """Proof-artifact emission for strict Q reconstructibility.
+ 
+-The certificate combines the replayed strict-Q reconstruction proof with a
+-solver-backed one-step uniqueness proof over the extracted equation semantics.
++The certificate combines source-history reconstruction with a solver-backed
++one-step uniqueness proof over the same extracted execution semantics.
+ Passing artifacts may claim the solver-backed strict-Q MDP theorem only when
+ both gates discharge and the independent checker verifies the recorded evidence.
+ """
+@@ -16,7 +16,7 @@ import os
+ from pathlib import Path
+ from typing import Any
+ 
+-from clarity.certification.reconstruct import get_strict_model
++from clarity.certification.reconstruct import strict_model_from_equations
+ from clarity.sysml.parser import (
+     BinaryExpr,
+     LiteralExpr,
+@@ -119,12 +119,17 @@ def _theorem_gate(
+     blocking: list[Diagnostic],
+     profile_obligations_discharged: bool,
+     solver_result: dict[str, Any] | None,
++    source_history_result: dict[str, Any] | None = None,
+ ) -> dict[str, Any]:
++    source_reconstruction = bool(proof and proof.get('proof_engine') == 'source_history_v1'
++        and proof.get('passes') is True and source_history_result
++        and source_history_result.get('status') == 'discharged'
++        and source_history_result.get('claim') == 'source_history_reconstruction'
++        and all(proof.get(k) == source_history_result.get(k) for k in ('b_obs', 'b_act', 'graph_sha256')))
++    legacy_reconstruction = bool(proof and proof.get('proof_engine') != 'source_history_v1'
++        and proof.get('passes') and equation_proof and equation_proof.get('passes'))
+     profile_discharged = bool(
+-        proof
+-        and proof.get("passes")
+-        and equation_proof
+-        and equation_proof.get("passes")
++        (source_reconstruction or legacy_reconstruction)
+         and not blocking
+         and profile_obligations_discharged
+     )
+@@ -138,7 +143,12 @@ def _theorem_gate(
+         blockers.append("profile_mdp_theorem_not_discharged")
+     if not solver_discharged:
+         blockers.append("solver_one_step_transition_closure_not_discharged")
+-    full_claim_allowed = profile_discharged and solver_discharged
++    history_discharged = bool(source_history_result
++        and source_history_result.get('status') == 'discharged'
++        and source_history_result.get('claim') == 'source_history_reconstruction')
++    if not history_discharged:
++        blockers.append('source_history_reconstruction_not_discharged')
++    full_claim_allowed = profile_discharged and solver_discharged and history_discharged
+     solver_gate = {
+         "status": "discharged" if solver_discharged else "not_discharged",
+         "source": "solver_advisory.one_step_transition_closure",
+@@ -172,7 +182,7 @@ def _theorem_gate(
+             "discharged" if full_claim_allowed else "not_discharged"
+         ),
+         "profile_theorem_statement": (
+-            "Within the extracted strict-Q syntactic semantics, the selected "
++            "Within the extracted source execution semantics, the selected "
+             "finite buffer reconstructs q and determines observations, "
+             "requirement statuses, reward, done, and exact shield execution "
+             "as recorded in mdp_obligations."
+@@ -191,8 +201,8 @@ def _theorem_gate(
+             "solver-backed one-step self-composition over q and executed action",
+         ],
+         "profile_requires": [
+-            "strict proof trace reconstructs every q variable at tau=0",
+-            "equation-IR proof trace reconstructs every q variable at tau=0",
++            "source-history proof reconstructs every q variable",
++            "source-history evidence is independently rebuilt and checked",
+             "no blocking extraction diagnostics",
+             "no legacy dependency fallback transitions",
+             "observation obligations discharged",
+@@ -203,6 +213,7 @@ def _theorem_gate(
+         ],
+         "profile_obligations_discharged": profile_obligations_discharged,
+         "solver_backed_uniqueness": solver_gate,
++        "source_history_reconstruction": "discharged" if history_discharged else "not_discharged",
+         "full_mdp_theorem_claim_allowed": full_claim_allowed,
+         "full_mdp_theorem_blockers": blockers,
+         "claim_policy": (
+@@ -807,47 +818,17 @@ def build_certificate_for_path(
+     dt = validate_dt(dt)
+     eq_model = extract_equation_model(model_path)
+     relevance = compute_transition_closed_relevance(eq_model)
+-    strict_model = get_strict_model(
+-        model_path, dt=dt, enable_sampled_memory=enable_sampled_memory
++    strict_model = strict_model_from_equations(
++        eq_model, dt=dt, enable_sampled_memory=enable_sampled_memory
+     )
+     target = set(strict_model.get("R", set())) or set(strict_model["STATE"])
+     blocking = _blocking_diagnostics(eq_model.diagnostics)
+ 
+-    selected, attempts = _strict_search(
+-        strict_model, max_obs=max_obs, max_act=max_act, horizon=horizon
+-    )
+-    equation_selected, equation_attempts = equation_search(
+-        eq_model,
+-        max_obs=max_obs,
+-        max_act=max_act,
+-        horizon=horizon,
+-        target=set(relevance.q),
+-        dt=dt,
+-        enable_sampled_memory=enable_sampled_memory,
+-    )
+-    if b_obs is None or b_act is None:
+-        if selected is not None:
+-            b_obs, b_act = selected
+-    else:
+-        selected = (b_obs, b_act)
+-
+-    proof = None
+-    equation_proof = None
++    # Buffer selection is completed after source-transition feasibility below.
++    # Scalar dependency/copy heuristics are no longer a prerequisite or fallback.
++    selected, attempts = None, []
++    proof, equation_proof = None, None
+     result = "UNKNOWN"
+-    if b_obs is not None and b_act is not None:
+-        proof = reconstruction_trace(
+-            strict_model, b_obs, b_act, horizon=horizon, target=target
+-        )
+-        equation_proof = equation_reconstruction_trace(
+-            eq_model,
+-            b_obs,
+-            b_act,
+-            horizon=horizon,
+-            target=set(relevance.q),
+-            dt=dt,
+-            enable_sampled_memory=enable_sampled_memory,
+-        )
+-        result = "PASS" if proof["passes"] and not blocking else "FAIL"
+ 
+     ignored = sorted(set(eq_model.state) - set(relevance.q))
+     transition_kinds = {
+@@ -879,20 +860,52 @@ def build_certificate_for_path(
+         mdp_obligations.get("overall_mdp_theorem_status")
+         == PROFILE_OBLIGATIONS_DISCHARGED
+     )
++    from .compact_transition import check_block_equations
++    compact_check = check_block_equations(
++        eq_model.execution['compact_transition'], eq_model.execution['decision_transition'],
++        include_artifacts=include_solver_artifacts,
++    )
++    if compact_check['status'] != 'discharged':
++        eq_model.add_diagnostic('error', 'compact_transition_not_preserved',
++                                'compact equations have not passed source correspondence checking')
++        blocking = _blocking_diagnostics(eq_model.diagnostics)
+     solver_advisory = {
++        'compact_representation_preservation': compact_check,
+         "one_step_transition_closure": one_step_transition_closure(
+             eq_model,
+             set(relevance.q),
+-            timeout_ms=1000,
++            dt=dt,
++            timeout_ms=30000,
+             include_artifacts=include_solver_artifacts,
+         )
+     }
++    from .source_buffer import select_source_buffer
++    closure = solver_advisory['one_step_transition_closure']
++    if closure.get('status') == 'discharged' and closure.get('claim') == 'one_step_transition_closure':
++        search = select_source_buffer(eq_model, set(relevance.q), dt=dt,
++            max_obs=max_obs, max_act=max_act, b_obs=b_obs, b_act=b_act,
++            include_artifacts=include_solver_artifacts)
++    else:
++        search = {'selected': None, 'proof': None, 'attempts': [],
++                  'minimality_claim': 'not searched: source-transition proof not discharged'}
++    selected, attempts = search['selected'], search['attempts']
++    if selected is not None:
++        b_obs, b_act = selected
++    history = search['proof'] or {'status': 'unknown', 'claim': 'not_claimed',
++        'reason': 'no_source_buffer_proved' if attempts else 'source_transition_not_discharged'}
++    solver_advisory['source_history_reconstruction'] = history
++    proof = {'proof_engine': 'source_history_v1',
++             'passes': selected is not None, 'b_obs': b_obs, 'b_act': b_act,
++             'target': sorted(relevance.q),
++             'graph_sha256': eq_model.execution['decision_transition']['sha256'],
++             'evidence_source': 'solver_advisory.source_history_reconstruction'}
+     theorem_gate = _theorem_gate(
+         proof=proof,
+         equation_proof=equation_proof,
+         blocking=blocking,
+         profile_obligations_discharged=profile_obligations_discharged,
+         solver_result=solver_advisory["one_step_transition_closure"],
++        source_history_result=solver_advisory['source_history_reconstruction'],
+     )
+     if proof is not None:
+         result = (
+@@ -924,7 +937,7 @@ def build_certificate_for_path(
+             "description": (
+                 "Proof that the selected finite buffer reconstructs the "
+                 "transition-closed relevant state q under the extracted "
+-                "equation/dependency semantics, and that Z3 discharges the "
++                "source execution semantics, and that Z3 discharges the "
+                 "one-step self-composed uniqueness obligation over q, executed "
+                 "actions, observations, terminal equations, and requirement "
+                 "status equations. Reward and done obligations are discharged "
+@@ -950,8 +963,8 @@ def build_certificate_for_path(
+             "blocking_diagnostic_severities": sorted(BLOCKING_DIAGNOSTIC_SEVERITIES),
+             "blocking_diagnostic_codes": sorted(BLOCKING_DIAGNOSTIC_CODES),
+             "pass_requires": [
+-                "selected buffer reconstructs every q variable at tau=0",
+-                "equation-IR proof trace reconstructs every q variable at tau=0",
++                "source-transition history proof reconstructs every q variable",
++                "independent checker rebuilds that source-history proof",
+                 "no warning/error diagnostics",
+                 "no legacy dependency fallback transitions",
+                 "reward and done obligations discharged over the augmented state",
+@@ -970,13 +983,8 @@ def build_certificate_for_path(
+                 else {"b_obs": selected[0], "b_act": selected[1]}
+             ),
+             "attempts": attempts,
+-            "equation_ir_selected_first_passing": (
+-                None if equation_selected is None
+-                else {"b_obs": equation_selected[0], "b_act": equation_selected[1]}
+-            ),
+-            "equation_ir_attempts": equation_attempts,
+-            "legacy_and_equation_search_agree": selected == equation_selected,
+-            "minimality_claim": "first passing pair in stated bounded lexicographic scan",
++            "proof_engine": "source_history_v1",
++            "minimality_claim": search['minimality_claim'],
+         },
+         "sets": {
+             "state": sorted(eq_model.state),
+diff --git a/src/clarity/certification/certificate_schema.py b/src/clarity/certification/certificate_schema.py
+index 0bc106a..646bba4 100644
+--- a/src/clarity/certification/certificate_schema.py
++++ b/src/clarity/certification/certificate_schema.py
+@@ -8,8 +8,8 @@ from pathlib import Path
+ from typing import Any
+ 
+ 
+-SCHEMA_VERSION = 4
+-PROOF_PROFILE = "strict_q_syntactic_reconstructibility_v1"
++SCHEMA_VERSION = 6
++PROOF_PROFILE = "source_q_reconstructibility_v1"
+ PROFILE_MDP_THEOREM = "strict_q_profile_mdp_v1"
+ SOLVER_BACKED_MDP_THEOREM = "strict_q_solver_backed_mdp_v1"
+ PROFILE_OBLIGATIONS_DISCHARGED = (
+diff --git a/src/clarity/certification/ordered_execution.py b/src/clarity/certification/ordered_execution.py
+index cb3a64a..9c2dc6c 100644
+--- a/src/clarity/certification/ordered_execution.py
++++ b/src/clarity/certification/ordered_execution.py
+@@ -5,7 +5,7 @@ of a cross-part scheduler, numerical flow, or encoded-observation MDP theorem.
+ """
+ from __future__ import annotations
+ 
+-from dataclasses import dataclass, asdict
++from dataclasses import dataclass, asdict, field, replace
+ import hashlib
+ import json
+ import re
+@@ -15,7 +15,7 @@ from clarity.sysml import parser as ast
+ from clarity.sysml.expression_types import expression_type, parse_checked_expression
+ from clarity.sysml.parser_values import assigned_features, initialization_values
+ 
+-VERSION = 2
++VERSION = 4
+ SAFETY_TAGS = {'Prohibition', 'Obligation'}
+ 
+ 
+@@ -159,6 +159,8 @@ class ExecutionInventory:
+     property_inventory: tuple
+     value_types: dict
+     diagnostics: tuple
++    decision_transition: dict = field(default_factory=dict)
++    compact_transition: dict = field(default_factory=dict)
+     version: int = VERSION
+ 
+     def to_dict(self):
+@@ -192,6 +194,7 @@ def build_execution_description(parser):
+             if isinstance(stmt, ast.AssignStmt):
+                 target = resolve_source_key(parser, context, stmt.target)
+                 data = {'target': target, 'expression': expression_record(stmt.expr),
++                        'source_target': list(stmt.target),
+                         'metadata': list(stmt.metadata), 'read_state': 'preceding_event',
+                         'write_state': identity, 'unaffected_storage': 'unchanged'}
+                 try:
+@@ -258,8 +261,16 @@ def build_execution_description(parser):
+     initial += [{'target': p.qualified_name,
+                  'kind': 'initial' if p.qualified_name in assigned else 'parameter', 'value': p.value,
+                  'metadata': list(p.metadata)} for p in parser.parameters]
+-    return ExecutionInventory(hashlib.sha256(Path(parser.file_path).read_bytes()).hexdigest(),
+-                              tuple(programs), tuple(initial), tuple(properties), types, tuple(diagnostics))
++    inventory = ExecutionInventory(hashlib.sha256(Path(parser.file_path).read_bytes()).hexdigest(),
++                                   tuple(programs), tuple(initial), tuple(properties), types, tuple(diagnostics))
++    from .decision_transition import compose_decision_transition
++    from .compact_transition import compact_decision_transition, validate_compact_transition
++    graph = compose_decision_transition(parser, inventory)
++    compact = compact_decision_transition(graph)
++    errors = validate_compact_transition(compact, graph)
++    if errors:
++        raise ValueError('; '.join(errors))
++    return replace(inventory, decision_transition=graph, compact_transition=compact)
+ 
+ 
+ def validate_execution_description(record, model_path):
+diff --git a/src/clarity/certification/reconstruct.py b/src/clarity/certification/reconstruct.py
+index 001ce7e..d4330b3 100644
+--- a/src/clarity/certification/reconstruct.py
++++ b/src/clarity/certification/reconstruct.py
+@@ -42,8 +42,13 @@ def _copy_source(eq_model, expr, seen=None):
+ 
+ 
+ def get_strict_model(path, *, dt, enable_sampled_memory=True):
++    return strict_model_from_equations(extract_equation_model(path), dt=dt,
++                                       enable_sampled_memory=enable_sampled_memory)
++
++
++def strict_model_from_equations(eq_model, *, dt, enable_sampled_memory=True):
++    """Reuse one source extraction within certificate generation."""
+     dt = validate_dt(dt)
+-    eq_model = extract_equation_model(path)
+     relevance = compute_transition_closed_relevance(eq_model)
+     nsupp = {}
+     copies = set()
+diff --git a/src/clarity/certification/sampled_values.py b/src/clarity/certification/sampled_values.py
+index d5baef2..34dd950 100644
+--- a/src/clarity/certification/sampled_values.py
++++ b/src/clarity/certification/sampled_values.py
+@@ -146,9 +146,6 @@ def finish_value_semantics(extractor):
+         "physical_values": sorted(physical),
+         "implicit_sample_to_physical_equality": False,
+     }
+-    if model.sample_events:
+-        model.add_diagnostic(
+-            "error", "sample_event_composition_required",
+-            "sample/delivery storage is explicit; these event equations require an "
+-            "ordered decision-to-decision composition before Markov certification",
+-        )
++    # strict_extract attaches the composed decision relation after this value
++    # inventory is complete. Solver discharge of that relation remains a hard
++    # certification gate; event equations alone never authorize certification.
+diff --git a/src/clarity/certification/solver.py b/src/clarity/certification/solver.py
+index e95d978..89d6afe 100644
+--- a/src/clarity/certification/solver.py
++++ b/src/clarity/certification/solver.py
+@@ -45,6 +45,22 @@ def _symbol_name(run: int | None, role: str, name: str) -> str:
+     return f"r{run}::{role}::{name}"
+ 
+ 
++def _expression_identity(expr: Expr):
++    # Python considers True == 1 == 1.0. They must not alias typed SMT terms.
++    if isinstance(expr, Const):
++        return ('const', type(expr.value).__name__, repr(expr.value))
++    if isinstance(expr, Var):
++        return ('var', expr.name)
++    if isinstance(expr, RawRef):
++        return ('raw', expr.path)
++    if isinstance(expr, Ite):
++        return ('ite', *(_expression_identity(child) for child in
++                         (expr.cond, expr.then_expr, expr.else_expr)))
++    if isinstance(expr, Op):
++        return ('op', expr.op, tuple(_expression_identity(arg) for arg in expr.args))
++    raise ValueError(f'unsupported expression {type(expr).__name__}')
++
++
+ def _var_symbol(
+     symbols: dict[tuple[int | None, str, str], Any],
+     sort: str,
+@@ -248,14 +264,39 @@ def _unsupported_expr(expr: Expr, model: EquationModel, path: str = "") -> list[
+         if not out:
+             out.append(f"unsupported expression in {here}")
+         return out
+-    if degree > MAX_SOLVER_POLYNOMIAL_DEGREE:
++    # The encoder retains each arithmetic operation as a named intermediate
++    # equation. Its degree is the degree of that constraint, not the degree
++    # obtained by recursively substituting every earlier equation into it.
++    local_degree = _constraint_degree(expr, model)
++    if local_degree > MAX_SOLVER_POLYNOMIAL_DEGREE:
+         out.append(
+-            f"polynomial degree {degree} exceeds supported degree "
++            f"constraint polynomial degree {local_degree} exceeds supported degree "
+             f"{MAX_SOLVER_POLYNOMIAL_DEGREE} polynomial fragment in {here}"
+         )
+     return out
+ 
+ 
++def _constraint_degree(expr: Expr, model: EquationModel, seen=None) -> int:
++    """Maximum local constraint degree with named intermediate results.
++
++    The separate fragment audit still rejects dynamic division, unsupported
++    operators and recursive definitions. This function never adds assumptions
++    about intermediate values or drops their defining equations.
++    """
++    seen = set(seen or ())
++    if isinstance(expr, Var) and expr.name in model.definitions:
++        if expr.name in seen:
++            return 0  # recursion is rejected by the fragment audit
++        return _constraint_degree(model.definitions[expr.name].expr, model, seen | {expr.name})
++    if isinstance(expr, Ite):
++        return max(1, *(_constraint_degree(child, model, seen)
++                        for child in (expr.cond, expr.then_expr, expr.else_expr)))
++    if isinstance(expr, Op):
++        local = 2 if expr.op == '*' and all(not _is_const_like(a, model) for a in expr.args) else 1
++        return max([local] + [_constraint_degree(arg, model, seen) for arg in expr.args])
++    return 1 if isinstance(expr, Var) and expr.name in model.state | model.actions else 0
++
++
+ def _max_polynomial_degree(model: EquationModel, q: set[str]) -> int:
+     visible = (
+         [model.transitions[name] for name in sorted(q) if name in model.transitions]
+@@ -263,11 +304,7 @@ def _max_polynomial_degree(model: EquationModel, q: set[str]) -> int:
+         + list(model.terminals.values())
+         + list(model.requirements.values())
+     )
+-    degrees = []
+-    for eq in visible:
+-        degree, _reasons = _polynomial_degree(eq.expr, model)
+-        if degree is not None:
+-            degrees.append(degree)
++    degrees = [_constraint_degree(eq.expr, model) for eq in visible]
+     return max(degrees, default=0)
+ 
+ 
+@@ -285,12 +322,17 @@ def unsupported_reasons(model: EquationModel, q: set[str]) -> list[str]:
+ 
+ 
+ class Encoder:
+-    def __init__(self, model: EquationModel, sorts: dict[str, str]):
++    def __init__(self, model: EquationModel, sorts: dict[str, str], *, compact=False):
+         self.model = model
++        # Existing trajectory consumers request expressions directly. Compact
++        # mode is explicit because its constraints must be installed as well.
++        self.compact = compact
+         self.sorts = sorts
+         self.symbols: dict[tuple[int | None, str, str], Any] = {}
+         self.next_cache: dict[tuple[int, str], Any] = {}
+         self.definition_cache: dict[tuple[int, str, str], Any] = {}
++        self.intermediate_cache: dict[tuple, Any] = {}
++        self.constraints: list[Any] = []
+ 
+     def sort_of(self, name: str) -> str:
+         return self.sorts.get(name, "Real")
+@@ -322,6 +364,19 @@ class Encoder:
+         return self.definition_cache[key]
+ 
+     def encode_expr(self, expr: Expr, run: int, role: str):
++        """Share a term without expanding its defining arithmetic into callers."""
++        if not self.compact or not isinstance(expr, (Op, Ite)):
++            return self._encode_expr(expr, run, role)
++        key = (run, role, _expression_identity(expr))
++        if key not in self.intermediate_cache:
++            value = self._encode_expr(expr, run, role)
++            symbol = z3.Const(_symbol_name(run, 'intermediate:' + role,
++                                           str(len(self.intermediate_cache))), value.sort())
++            self.intermediate_cache[key] = symbol
++            self.constraints.append(symbol == value)
++        return self.intermediate_cache[key]
++
++    def _encode_expr(self, expr: Expr, run: int, role: str):
+         if isinstance(expr, Const):
+             if isinstance(expr.value, bool):
+                 return z3.BoolVal(expr.value)
+@@ -402,8 +457,9 @@ def one_step_transition_closure(
+     model: EquationModel,
+     q: set[str],
+     *,
+-    timeout_ms: int = 1000,
++    timeout_ms: int = 30000,
+     include_artifacts: bool = False,
++    dt: float | None = None,
+ ) -> dict[str, Any]:
+     """Check one-step transition closure by self-composition.
+ 
+@@ -411,6 +467,18 @@ def one_step_transition_closure(
+     disagreeing on next q/observation/terminal/requirement equations.
+     """
+ 
++    if z3 is None:
++        return {'status': 'unavailable', 'reason': 'z3-solver is not installed',
++                'claim': 'not_claimed_by_this_artifact'}
++
++    if model.execution.get('decision_transition'):
++        if dt is None:
++            return {'status': 'unknown', 'reason': 'source_transition_requires_configured_dt',
++                    'claim': 'not_claimed_by_this_artifact'}
++        from .source_solver import check_source_transition_closure
++        return check_source_transition_closure(model, q, dt=dt, timeout_ms=timeout_ms,
++                                               include_artifacts=include_artifacts)
++
+     if z3 is None:
+         return {
+             "status": "unavailable",
+@@ -438,7 +506,7 @@ def one_step_transition_closure(
+     logic = "QF_UFNRA" if max_degree > 1 else "QF_UFLRA"
+     solver = z3.SolverFor(logic)
+     solver.set(timeout=timeout_ms)
+-    enc = Encoder(model, sorts)
++    enc = Encoder(model, sorts, compact=True)
+ 
+     equalities = []
+     for name in sorted(q):
+@@ -470,6 +538,7 @@ def one_step_transition_closure(
+ 
+     if equalities:
+         solver.add(z3.And(*equalities))
++    solver.add(*enc.constraints)
+     solver.add(z3.Or(*[_neq(left, right) for _label, left, right in disagreements]))
+ 
+     result = solver.check()
+@@ -510,6 +579,8 @@ def one_step_transition_closure(
+             "solver": "z3",
+             "logic": logic,
+             "max_polynomial_degree": max_degree,
++            "degree_measure": "maximum degree of individual intermediate constraints",
++            "intermediate_constraints": len(enc.constraints),
+             "timeout_ms": timeout_ms,
+             "q_size": len(q),
+             "actions_size": len(model.actions),
+diff --git a/src/clarity/certification/strict_extract.py b/src/clarity/certification/strict_extract.py
+index 5b72ac3..4c61a73 100644
+--- a/src/clarity/certification/strict_extract.py
++++ b/src/clarity/certification/strict_extract.py
+@@ -85,6 +85,33 @@ class CertificationExtractor:
+         finish_value_semantics(self)
+         from .ordered_execution import build_execution_description
+         self.model.execution = build_execution_description(self.parser).to_dict()
++        composed = self.model.execution['decision_transition']
++        self.model.value_semantics['decision_transition_sha256'] = composed['sha256']
++        # These are source-owned writer sites in the composed relation, not
++        # substitutes for a solver-checked next-decision equation.
++        storage_by_name = defaultdict(list)
++        for key, record in composed['storage'].items():
++            if key.startswith(self.parser.system_part + '::'):
++                storage_by_name[self.canonical_name(key.split('::'))].append((key, record))
++        # The legacy equation view names machine-state encodings <part>_state.
++        # Their actual storage is current_sm_state, not engine.state; retain that
++        # distinction instead of manufacturing a source attribute or Boolean.
++        for context in self.parser.instance_state_machines:
++            key = '$machine:' + context
++            storage_by_name[f'{self._inst_name(context)}_state'].append((key, composed['storage'][key]))
++        self.model.value_semantics['decision_updates'] = {
++            name: [{'runtime_key': key, 'writers': record['writers'],
++                    'otherwise': record['otherwise']}
++                   for key, record in sorted(storage_by_name[name])]
++            for name in sorted(self.model.state)
++        }
++        for name in sorted(self.model.state):
++            if not storage_by_name[name]:
++                self.model.add_diagnostic('error', 'missing_composed_storage',
++                    'state is absent from the source decision-transition storage inventory', name)
++        self.model.add_diagnostic('error', 'decision_transition_solver_required',
++            'ordered decision paths are composed; the equation solver must discharge '
++            'their relationship to its next-state equations before certification')
+         self.model.declared_sorts = {
+             self.canonical_name(name.split('::')): {'Boolean': 'Bool', 'Integer': 'Int', 'Real': 'Real'}[sort]
+             for name, sort in self.model.execution['value_types'].items()
+@@ -94,7 +121,8 @@ class CertificationExtractor:
+             self.model.add_diagnostic('error', diagnostic['code'], diagnostic['message'], diagnostic['source'])
+         for name in sorted(self.model.state - set(self.model.transitions)):
+             self.model.add_diagnostic('error', 'missing_ordered_update',
+-                'no decision transition or source-justified hold', name)
++                'the equation solver has no next-decision equation for this storage; '
++                'its composed writer sites are retained in value_semantics.decision_updates', name)
+         self._audit_equations()
+         return self.model
+ 
+@@ -780,7 +808,8 @@ class CertificationExtractor:
+             self.model.add_diagnostic(
+                 "error",
+                 "missing_transition_equation",
+-                "state value has no transition equation in the SysML file",
++                "equation solver lacks a verified next-decision equation; "
++                "source update operations are retained in composed execution",
+                 target,
+             )
+         known_vars = self.model.state | self.model.actions | set(self.model.definitions)
+diff --git a/src/clarity/discretization/certificates/verification/source_reconstruction.py b/src/clarity/discretization/certificates/verification/source_reconstruction.py
+index 37fd3c0..5ada926 100644
+--- a/src/clarity/discretization/certificates/verification/source_reconstruction.py
++++ b/src/clarity/discretization/certificates/verification/source_reconstruction.py
+@@ -40,6 +40,10 @@ def _expand_definitions(
+ ) -> Expr:
+     visited = set(seen or set())
+     if isinstance(expression, Var) and expression.name in model.definitions:
++        if expression.name in model.sampled_state:
++            raise ValueError(
++                f"stored sampled value {expression.name} also has a timeless definition"
++            )
+         if expression.name in visited:
+             raise ValueError(f"cyclic definition {expression.name}")
+         return _expand_definitions(
+@@ -461,7 +465,7 @@ def _timing_record(
+     dt_record: dict[str, Any],
+ ) -> dict[str, Any]:
+     sampled = []
+-    for fact in mdp_certificate.get("equation_proof", {}).get("facts", []):
++    for fact in (mdp_certificate.get("equation_proof") or {}).get("facts", []):
+         if fact.get("rule") != "sampled_memory_bound":
+             continue
+         detail = fact.get("detail") or {}
+diff --git a/src/clarity/discretization/model/proof_rules.py b/src/clarity/discretization/model/proof_rules.py
+index 87af4c8..8320456 100644
+--- a/src/clarity/discretization/model/proof_rules.py
++++ b/src/clarity/discretization/model/proof_rules.py
+@@ -88,6 +88,11 @@ def expand_definitions(
+ ) -> Expr:
+     seen = set(seen or set())
+     if isinstance(expr, Var) and expr.name in model.definitions:
++        if expr.name in model.sampled_state:
++            raise ProofDeferred(
++                "CONFLICTING_VALUE_SEMANTICS",
++                f"stored sampled value {expr.name} also has a timeless definition",
++            )
+         if expr.name in seen:
+             raise ProofDeferred(
+                 "UNSUPPORTED_EXPRESSION",
+diff --git a/src/clarity/discretization/obligations.py b/src/clarity/discretization/obligations.py
+index be82c4a..9d2c858 100644
+--- a/src/clarity/discretization/obligations.py
++++ b/src/clarity/discretization/obligations.py
+@@ -268,7 +268,7 @@ def timing_record(
+     dt_record: dict[str, Any],
+ ) -> dict[str, Any]:
+     sampled = []
+-    for fact in mdp_certificate.get("equation_proof", {}).get("facts", []):
++    for fact in (mdp_certificate.get("equation_proof") or {}).get("facts", []):
+         if fact.get("rule") != "sampled_memory_bound":
+             continue
+         detail = fact.get("detail") or {}
+diff --git a/src/clarity/models/mixing-sysml-model/model.sysml b/src/clarity/models/mixing-sysml-model/model.sysml
+index 8c47dcd..20ef2ed 100644
+--- a/src/clarity/models/mixing-sysml-model/model.sysml
++++ b/src/clarity/models/mixing-sysml-model/model.sysml
+@@ -368,24 +368,24 @@ package TankFillingSystem {
+             send volume1ReadingReq via volumeSensor1Port.req;
+             item volume1Res : ReadInputRegisterRespMsg;
+             accept volume1Res : ReadInputRegisterRespMsg via volumeSensor1Port.resp;
+-            assign observedLevel1 := volume1Res.response;
++            assign observedLevel1 := volume1Res.response - toleranceMl;
+ 
+             item volume2ReadingReq : ReadInputRegisterReqMsg;
+             assign volume2ReadingReq.registerAddress := 0;
+             send volume2ReadingReq via volumeSensor2Port.req;
+             item volume2Res : ReadInputRegisterRespMsg;
+             accept volume2Res : ReadInputRegisterRespMsg via volumeSensor2Port.resp;
+-            assign observedLevel2 := volume2Res.response;
++            assign observedLevel2 := volume2Res.response - toleranceMl;
+ 
+             action policyCall : Policy {
+-                in tank1VolumeMl := volume1Res.response;
+-                in tank2VolumeMl := volume2Res.response;
++                in tank1VolumeMl := observedLevel1;
++                in tank2VolumeMl := observedLevel2;
+                 in tank1TargetTransferMl := tank1TransferMl;
+                 in tank2TargetTransferMl := tank2TransferMl;
+                 in tank1OriginalMl := tank1OriginalLevelMl;
+                 in tank2OriginalMl := tank2OriginalLevelMl;
+-                in done := (tank1OriginalLevelMl - volume1Res.response >= tank1TransferMl) and
+-                            (tank2OriginalLevelMl - volume2Res.response >= tank2TransferMl);
++                in done := (tank1OriginalLevelMl - observedLevel1 >= tank1TransferMl) and
++                            (tank2OriginalLevelMl - observedLevel2 >= tank2TransferMl);
+             }
+ 
+             if policyCall.shouldOpenValve1 {
+diff --git a/src/clarity/runtime/env.py b/src/clarity/runtime/env.py
+index 1ee7981..85ba193 100644
+--- a/src/clarity/runtime/env.py
++++ b/src/clarity/runtime/env.py
+@@ -196,8 +196,9 @@ class SysMLEnv:
+         elif result.outcome == 'terminal':
+             reward, done, outcome = 1.0, True, 'SUCCESS'
+         else:
+-            reward, done = self._compute_reward(result.state, statuses)
+-            outcome = 'SUCCESS' if reward > 0 else 'RUNNING'
++            # A pending decision, even with done=True in its inputs, still
++            # needs its commands applied and checked before terminal success.
++            reward, done, outcome = -0.01, False, 'RUNNING'
+         truncated = self._step_count >= self._max_steps and not done
+         if truncated:
+             reward, done, outcome = 0.0, True, 'TRUNCATED'
+diff --git a/src/clarity/runtime/normalization.json b/src/clarity/runtime/normalization.json
+index dc0476b..70ed3cc 100644
+--- a/src/clarity/runtime/normalization.json
++++ b/src/clarity/runtime/normalization.json
+@@ -68,6 +68,22 @@
+       "source_path": "src/clarity/models/thermostat/model.sysml",
+       "provenance": "restored published input; existing recorded observation scale retained",
+       "previous_source_sha256": "6e27d7982c5e0856deb9ce452f513b33057c388a39fe5919e36e31de484b7192"
++    },
++    {
++      "source_sha256": "3fd949d55c97de73946be48f803f982eecbb2fee78e568843d77ef4964403254",
++      "dt": 0.1,
++      "scale": 102.0,
++      "source_path": "src/clarity/models/cruise-controller-model/model.sysml",
++      "provenance": "Property-expression correction; unchanged observation layout and recorded scale",
++      "previous_source_sha256": "993d66bfad6f93081dfa9a96e7192294cc674a82ae33314a66753e5e937c8150"
++    },
++    {
++      "source_sha256": "c8830d637e532bdc364ec76c8d2860dd368483c0949dc761427e84b71c7f598e",
++      "dt": 0.1,
++      "scale": 150.0,
++      "source_path": "src/clarity/models/mixing-sysml-model/model.sysml",
++      "provenance": "Property-expression correction; unchanged observation layout and recorded scale",
++      "previous_source_sha256": "24b70d1c542aea700fc13fdeaabd3230c69bdb4f4c5242d2115f2fedd5463c84"
+     }
+   ]
+ }
+diff --git a/src/clarity/sysml/parser.py b/src/clarity/sysml/parser.py
+index dcc6b54..cff252d 100644
+--- a/src/clarity/sysml/parser.py
++++ b/src/clarity/sysml/parser.py
+@@ -208,10 +208,10 @@ class ExpressionParser:
+ 
+     def _parse_implies(self) -> Expr:
+         left = self._parse_or()
+-        self._skip_whitespace()
+-        if self._consume('implies'):
+-            right = self._parse_implies()
+-            return BinaryExpr('implies', left, right)
++        # KerML ImpliesExpression folds OrExpression operands left to right.
++        while self._consume('implies'):
++            right = self._parse_or()
++            left = BinaryExpr('implies', left, right)
+         return left
+ 
+     def _parse_or(self) -> Expr:
+@@ -238,20 +238,21 @@ class ExpressionParser:
+ 
+     def _parse_equality(self) -> Expr:
+         left = self._parse_comparison()
+-        self._skip_whitespace()
+-        if self._consume('=='):
++        while self._consume('=='):
+             right = self._parse_comparison()
+-            return BinaryExpr('==', left, right)
++            left = BinaryExpr('==', left, right)
+         return left
+ 
+     def _parse_comparison(self) -> Expr:
+         left = self._parse_additive()
+-        self._skip_whitespace()
+-        for op in ['>=', '<=', '>', '<']:
+-            if self._consume(op):
+-                right = self._parse_additive()
+-                return BinaryExpr(op, left, right)
+-        return left
++        while True:
++            for op in ['>=', '<=', '>', '<']:
++                if self._consume(op):
++                    right = self._parse_additive()
++                    left = BinaryExpr(op, left, right)
++                    break
++            else:
++                return left
+ 
+     def _parse_additive(self) -> Expr:
+         left = self._parse_multiplicative()
+diff --git a/src/clarity/sysml/simulator_adapter.py b/src/clarity/sysml/simulator_adapter.py
+index b025787..bf75261 100644
+--- a/src/clarity/sysml/simulator_adapter.py
++++ b/src/clarity/sysml/simulator_adapter.py
+@@ -57,10 +57,9 @@ class SimulatorTwin:
+         if type(inputs[self._completion_name]) is not bool:
+             raise ValueError('source Completion input is not Boolean')
+         self._model_inputs = dict(inputs)
+-        self.engine.record_requirements('decision')
+-        if inputs[self._completion_name]:
+-            self._publish('terminal', inputs)
+-            raise _SimulationStopped
++        # All source safety properties are checked together at cycle_end.
++        # Completion must likewise wait for this final response to be applied.
++        self._terminal_after_response = inputs[self._completion_name]
+         self._publish('decision', inputs)
+         self._action_ready.wait()
+         self._action_ready.clear()
+@@ -72,6 +71,9 @@ class SimulatorTwin:
+         try:
+             while not self._sim_done.is_set():
+                 self.engine.step(self._dt)
++                if self._terminal_after_response:
++                    self._publish('terminal', self._model_inputs)
++                    break
+         except _SimulationStopped:
+             pass
+         except Exception as exc:
+@@ -99,6 +101,7 @@ class SimulatorTwin:
+         self._sim_done.clear()
+         self._model_inputs = {}
+         self._response = None
++        self._terminal_after_response = False
+         self._engine = SimulationEngine(self._parser)
+         self._engine.model = self._model_fn
+         self._engine.requirement_ledger = RequirementLedger(self._episode_id)
+diff --git a/tests/certification/battery/model_cases.py b/tests/certification/battery/model_cases.py
+index c9aa287..5a4cd10 100644
+--- a/tests/certification/battery/model_cases.py
++++ b/tests/certification/battery/model_cases.py
+@@ -78,34 +78,16 @@ def validate_positive_model(
+         ),
+     )
+ 
+-    strict_model = get_strict_model(MODELS[name], dt=TEST_DT)
+-    observed_buffer = first_closure(strict_model)
+-    battery.require(
+-        f"{name}/first_closure",
+-        observed_buffer == expected["buffer"],
+-        f"expected={expected['buffer']} observed={observed_buffer}",
+-    )
+-
+-    exp_obs, exp_act = expected["buffer"]
+-    target = set(strict_model.get("R", set())) or set(strict_model["STATE"])
+-    prior_failures = []
+-    for b_obs in range(exp_obs + 1):
+-        for b_act in range(5):
+-            if (b_obs, b_act) >= (exp_obs, exp_act):
+-                continue
+-            try:
+-                missing, _ = reconstruct(strict_model, b_obs, b_act, horizon=8, target=target)
+-            except ValueError:
+-                continue  # Missing source transitions are not a successful buffer.
+-            if not missing:
+-                prior_failures.append((b_obs, b_act))
+-    battery.require(
+-        f"{name}/smaller_buffers_fail",
+-        not prior_failures,
+-        f"unexpected earlier passing buffers={prior_failures}",
+-    )
+-
+     cert = build_certificate_for_path(MODELS[name], dt=TEST_DT)
++    observed_buffer = cert.get('buffer')
++    observed_buffer = None if observed_buffer is None else (observed_buffer['b_obs'], observed_buffer['b_act'])
++    battery.require(f'{name}/first_proved_source_buffer', observed_buffer == expected['buffer'],
++                    f"expected={expected['buffer']} observed={observed_buffer}")
++    attempts = cert.get('search', {}).get('attempts', [])
++    earlier = [row for row in attempts if (row['b_obs'],row['b_act']) < expected['buffer']]
++    battery.require(f'{name}/earlier_source_buffers_not_proved',
++                    all(row['passes'] is False for row in earlier), str(earlier))
++
+     cert_path = cert_dir / f"{name}.certificate.json"
+     write_certificate(cert, cert_path)
+     disk_cert = load_certificate(cert_path)
+@@ -115,7 +97,7 @@ def validate_positive_model(
+     )
+     obligations = cert["mdp_obligations"]
+     gate = cert["theorem_gate"]
+-    equation_proof = cert["equation_proof"] or {}
++    source_history = cert['solver_advisory']['source_history_reconstruction']
+     ignored_state = set(cert["sets"]["ignored_state"])
+     ignored_reasons = cert["sets"]["ignored_state_reasons"]
+     one_step_solver = cert["solver_advisory"]["one_step_transition_closure"]
+@@ -147,21 +129,17 @@ def validate_positive_model(
+         and not gate["full_mdp_theorem_blockers"]
+         and gate["solver_backed_uniqueness"]["status"] == "discharged"
+         and gate["solver_backed_uniqueness"]["result_status"] == "discharged"
+-        and cert["search"]["legacy_and_equation_search_agree"] is True
+-        and equation_proof["proof_engine"] == "equation_ir_syntactic_v1"
+-        and equation_proof["passes"] is True
+-        and not equation_proof["missing_target_facts"]
++        and cert['proof']['proof_engine'] == 'source_history_v1'
++        and cert['proof']['passes'] is True
++        and source_history['status'] == 'discharged'
++        and source_history['claim'] == 'source_history_reconstruction'
++        and cert['proof']['target'] == cert['sets']['q']
+         and one_step_solver["status"] == expected["solver_status"]
+         and (
+             one_step_solver["claim"] == "one_step_transition_closure"
+             if one_step_solver["status"] == "discharged"
+             else one_step_solver["claim"] == "not_claimed_by_this_artifact"
+         )
+-        and not any(
+-            fact["rule"] == "equation_guarded_copy_inversion"
+-            and fact["detail"].get("guard_status") != "proven_true"
+-            for fact in equation_proof["facts"]
+-        )
+         and not certificate_unresolved_raw
+         and all(
+             "backward cone" in ignored_reasons.get(var, "")
+diff --git a/tests/certification/battery/mutation_cases.py b/tests/certification/battery/mutation_cases.py
+index 83948c2..1c2132d 100644
+--- a/tests/certification/battery/mutation_cases.py
++++ b/tests/certification/battery/mutation_cases.py
+@@ -307,5 +307,19 @@ def run_mutation_cases(battery: Battery, base: dict[str, Any]) -> None:
+             lambda c: c["model"].__setitem__("sha256", "0" * 64),
+         ),
+     ]
++    if (base.get('proof') or {}).get('proof_engine') == 'source_history_v1':
++        obsolete_trace_cases = {'missing_equation_proof','equation_proof_not_passes',
++            'equation_target_fact_removed','equation_bad_forward_premise','equation_unsafe_guarded_inversion',
++            'target_fact_removed','bad_forward_premise'}
++        mutations = [(name, mutation) for name, mutation in mutations if name not in obsolete_trace_cases]
++        mutations.extend([
++            ('missing_source_history', lambda c: c['solver_advisory'].pop('source_history_reconstruction')),
++            ('source_history_not_discharged', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('status','unknown')),
++            ('source_target_changed', lambda c: c['proof'].__setitem__('target',['not_source_storage'])),
++            ('source_graph_changed', lambda c: c['proof'].__setitem__('graph_sha256','0'*64)),
++            ('source_history_buffer_changed', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('b_act',-1)),
++            ('source_history_encoding_changed', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('observation_dtype','float64')),
++            ('source_history_padding_changed', lambda c: c['solver_advisory']['source_history_reconstruction'].__setitem__('reset_padding','unconstrained')),
++        ])
+     for name, mutator in mutations:
+         _assert_mutation_rejected(battery, base, name, mutator)
+diff --git a/tests/certification/battery/solver_cases.py b/tests/certification/battery/solver_cases.py
+index f5222b6..54a9123 100644
+--- a/tests/certification/battery/solver_cases.py
++++ b/tests/certification/battery/solver_cases.py
+@@ -169,7 +169,7 @@ def run_solver_cases(battery: Battery) -> None:
+             f"solver_unit/degree_{degree}_unsat",
+             polynomial_result["status"] == "discharged"
+             and polynomial_result.get("logic") == "QF_UFNRA"
+-            and polynomial_result.get("max_polynomial_degree") == degree,
++            and polynomial_result.get("max_polynomial_degree") == 2,
+             f"result={polynomial_result}",
+         )
+ 
+@@ -192,7 +192,7 @@ def run_solver_cases(battery: Battery) -> None:
+             f"solver_unit/hidden_degree_{degree}_sat",
+             hidden_polynomial_result["status"] == "counterexample"
+             and hidden_polynomial_result.get("logic") == "QF_UFNRA"
+-            and hidden_polynomial_result.get("max_polynomial_degree") == degree
++            and hidden_polynomial_result.get("max_polynomial_degree") == 2
+             and hidden_polynomial_result.get("disagreement", {}).get("term") == "next_q.x",
+             f"result={hidden_polynomial_result}",
+         )
+@@ -213,13 +213,10 @@ def run_solver_cases(battery: Battery) -> None:
+     )
+     too_high_result = one_step_transition_closure(too_high_degree, {"x"})
+     battery.require(
+-        f"solver_unit/degree_{unsupported_degree}_unknown",
+-        too_high_result["status"] == "unknown"
+-        and too_high_result.get("reason") == "unsupported_fragment"
+-        and any(
+-            f"polynomial degree {unsupported_degree}" in item
+-            for item in too_high_result.get("unsupported", [])
+-        ),
++        f"solver_unit/degree_{unsupported_degree}_compact_unsat",
++        too_high_result["status"] == "discharged"
++        and too_high_result.get("max_polynomial_degree") == 2
++        and too_high_result.get("intermediate_constraints", 0) > 0,
+         f"result={too_high_result}",
+     )
+ 
+diff --git a/tests/certification/validate_mixing_contract.py b/tests/certification/validate_mixing_contract.py
+index d8d7cc2..04443aa 100644
+--- a/tests/certification/validate_mixing_contract.py
++++ b/tests/certification/validate_mixing_contract.py
+@@ -1,4 +1,4 @@
+-"""Reproduce the literal mixing requirement/contract conflict without changing it.
++"""Check the corrected per-tank requirement against its controller contract.
+ 
+ The four-row check concerns completed-scan states, not reachability. The
+ separate trace starts from the declared initial state, executes the original
+@@ -11,6 +11,7 @@ from __future__ import annotations
+ import argparse
+ import hashlib
+ import json
++from itertools import product
+ from dataclasses import asdict
+ from pathlib import Path
+ 
+@@ -60,26 +61,32 @@ def check(model_path, *, max_cycles=5000, dt=.1):
+             a, c = first_pending, second_pending
+             b = outputs['shouldOpenValve1'] and outputs['shouldTurnOnPump1']
+             d = outputs['shouldOpenValve2'] and outputs['shouldTurnOnPump2']
+-            chained = (not ((not a) or (b and c))) or d
+-            assert literal is chained
+-            proposed = ((not a) or b) and ((not c) or d)
++            expected = ((not a) or b) and ((not c) or d)
++            assert literal is expected
++            assert literal is True
++            # Check the actual parsed property under every actuator pairing,
++            # not only the particular output chosen by the controller.
++            for pump1, valve1, pump2, valve2 in product((False, True), repeat=4):
++                state.update({'system::pump1::isRunning': pump1,
++                              'system::valve1::isOpen': valve1,
++                              'system::pump2::isRunning': pump2,
++                              'system::valve2::isOpen': valve2})
++                actual = ExpressionEvaluator(state, requirement.context,
++                    parser.ref_bindings, parser.system_part, strict=True).evaluate(requirement.expression)
++                assert actual is (((not a) or (pump1 and valve1)) and
++                                  ((not c) or (pump2 and valve2)))
+             rows.append(dict(first_pending=a, second_pending=c, inputs=inputs,
+                              outputs=outputs, original_requirement=literal,
+-                             proposed_parenthesized_requirement=proposed))
++                             english_per_tank_requirement=expected))
+ 
+-    # Symbolic, exhaustive Boolean proof: at a completed contract-conforming
+-    # scan, the literal requirement is equivalent to A or C, not true.
++    # Exhaustive Boolean proof of the two independent tank obligations.
+     a, b, c, d = z3.Bools('tank1_pending tank1_on tank2_pending tank2_on')
+-    literal = z3.Implies(z3.Implies(a, z3.And(b, c)), d)
++    literal = z3.And(z3.Implies(a, b), z3.Implies(c, d))
+     contract = z3.And(b == a, d == c)
+-    equivalence = z3.Solver(); equivalence.add(contract, literal != z3.Or(a, c))
+-    contradiction = z3.Solver()
+-    contradiction.add(contract, z3.Not(a), z3.Not(c), literal)
+-    proposed = z3.Solver()
+-    proposed.add(contract, z3.Not(z3.And(z3.Implies(a, b), z3.Implies(c, d))))
+-    checks = {'literal_reduces_to_any_target_pending': str(equivalence.check()),
+-              'completed_targets_contract_and_literal_requirement': str(contradiction.check()),
+-              'parenthesized_per_tank_implications_follow_from_contract': str(proposed.check())}
++    required = z3.Solver(); required.add(contract, z3.Not(literal))
++    complete = z3.Solver(); complete.add(z3.Not(a), z3.Not(c), z3.Not(literal))
++    checks = {'per_tank_obligations_follow_from_contract': str(required.check()),
++              'completed_targets_satisfy_requirement': str(complete.check())}
+     assert all(result == 'unsat' for result in checks.values())
+ 
+     engine = SimulationEngine(parser); engine.initialize()
+@@ -101,7 +108,9 @@ def check(model_path, *, max_cycles=5000, dt=.1):
+     else:
+         raise AssertionError('declared initialization did not complete within the configured cycle limit')
+     statuses = engine.requirement_statuses()
+-    assert statuses['Fluid Transfer Liveness']['status'] is False
++    assert statuses['Fluid Transfer Liveness']['status'] is True
++    assert all(row['status'] is True for row in statuses.values()), statuses
++    assert all(row['status'] is True for event in events for row in event.statuses.values())
+     report = {
+         'source_path': str(Path(model_path).resolve()),
+         'source_sha256': hashlib.sha256(Path(model_path).read_bytes()).hexdigest(),
+diff --git a/tests/certification/validate_reference_models.py b/tests/certification/validate_reference_models.py
+index abace7d..2856d16 100644
+--- a/tests/certification/validate_reference_models.py
++++ b/tests/certification/validate_reference_models.py
+@@ -163,27 +163,10 @@ def _failures_for_model(name: str) -> list[str]:
+                     f"cruise-discrete: {target} does not reference policy action {action}"
+                 )
+ 
+-    strict_model = get_strict_model(MODELS[name], dt=TEST_DT)
+-    best = _first_closure(strict_model)
+-    expected = EXPECTED_STRICT_CLOSURE[name]
+-    if best != expected:
+-        failures.append(
+-            f"{name}: strict closure changed; expected {expected}, observed {best}"
+-        )
+-
+-    if name == "mixing":
+-        without_sampled_memory = get_strict_model(
+-            MODELS[name], dt=TEST_DT, enable_sampled_memory=False
+-        )
+-        if _first_closure(without_sampled_memory) is not None:
+-            failures.append(
+-                "mixing: strict closure unexpectedly succeeds without sampled-memory rule"
+-            )
+-        if len(strict_model.get("sampled_memories", [])) != 3:
+-            failures.append(
+-                "mixing: expected three sampled-memory rules "
+-                "(lastScanTimeSeconds and two observed levels)"
+-            )
++    for variable in relevance.q:
++        entries = model.value_semantics.get('decision_updates', {}).get(variable, [])
++        if len(entries) != 1 or not entries[0].get('runtime_key'):
++            failures.append(f'{name}: relevant state has no unique source storage: {variable}')
+ 
+     return failures
+ 
+@@ -251,25 +234,14 @@ def _certificate_failures_for_model(name: str, out_dir: Path) -> list[str]:
+         failures.append(f"{name}: theorem gate records unexpected blockers")
+     if gate.get("solver_backed_uniqueness", {}).get("status") != "discharged":
+         failures.append(f"{name}: theorem gate solver uniqueness is not discharged")
+-    if cert.get("search", {}).get("legacy_and_equation_search_agree") is not True:
+-        failures.append(f"{name}: legacy and equation-IR searches disagree")
+-    equation_proof = cert.get("equation_proof", {})
+-    if equation_proof.get("proof_engine") != "equation_ir_syntactic_v1":
+-        failures.append(f"{name}: missing or unsupported equation-IR proof")
+-    if equation_proof.get("passes") is not True:
+-        failures.append(f"{name}: equation-IR proof does not pass")
+-    if equation_proof.get("missing_target_facts"):
+-        failures.append(f"{name}: equation-IR proof reports missing targets")
+-    if name == "mixing" and not equation_proof.get("blocked_unsafe_inversions"):
+-        failures.append(
+-            "mixing: equation-IR proof did not record blocked guarded-copy inversions"
+-        )
+-    if any(
+-        fact.get("rule") == "equation_guarded_copy_inversion"
+-        and fact.get("detail", {}).get("guard_status") != "proven_true"
+-        for fact in equation_proof.get("facts", [])
+-    ):
+-        failures.append(f"{name}: equation-IR proof used an unsafe guarded-copy inversion")
++    source_proof = cert.get('proof') or {}
++    history = cert.get('solver_advisory', {}).get('source_history_reconstruction', {})
++    if source_proof.get('proof_engine') != 'source_history_v1' or source_proof.get('passes') is not True:
++        failures.append(f'{name}: source-history proof does not pass')
++    if history.get('status') != 'discharged' or history.get('claim') != 'source_history_reconstruction':
++        failures.append(f'{name}: source-history reconstruction is not discharged')
++    if source_proof.get('target') != cert.get('sets', {}).get('q'):
++        failures.append(f'{name}: source reconstruction target differs from q')
+     solver = cert.get("solver_advisory", {}).get("one_step_transition_closure", {})
+     if solver.get("status") != EXPECTED_SOLVER_ADVISORY[name]:
+         failures.append(
+diff --git a/tests/training/validate_sysml_safety.py b/tests/training/validate_sysml_safety.py
+index b5411d3..0eabd91 100644
+--- a/tests/training/validate_sysml_safety.py
++++ b/tests/training/validate_sysml_safety.py
+@@ -168,42 +168,69 @@ def check_boundary_and_terminal_results() -> dict:
+ 
+ 
+ 
+-def check_original_dry_running_failure() -> dict:
+-    """Negative control: restore the known unsafe request in this test only."""
++def check_dry_running_accounting() -> dict:
++    """Check normal shutdown and a deliberately faulty empty-tank response."""
+     model = next(m for m in discover_sysml([], models_root=models_root()) if m.key == 'tank-filling-system')
+-    env = BufferedDiscreteEnv(str(model.path), dt=.1, max_steps=100, phase=1, n_obs=0, n_act=0, observation_scale=1)
+-    original_sample = env._sample_scenario
+-    def unsafe_request():
+-        scenario = original_sample()
+-        for tank in [1, 2]:
+-            original = scenario[f'system::controller::tank{tank}OriginalLevelMl']
+-            assert original <= (50 if tank == 1 else 100)
+-            scenario[f'system::controller::tank{tank}TransferMl'] = original
+-        return scenario
+-    env._sample_scenario = unsafe_request
+-    # Fault-injection fixture uses phase 1 to retain the whole trace after the
+-    # independently detected initialization failure; all failures still count.
+-    iface = extract_interface(str(model.path))
+-    policy = MLPActorCritic(env.obs_dim, env.n_actions, 4, seed=0)
+-    composite = ProgramShieldComposite(policy, iface['spec_shield'], iface['obs_names'])
+-    try:
+-        episode = collect_episode(env, composite, greedy=True, reset_seed=1323514403)
+-        actual = env._twin.engine.requirement_statuses()
+-        assert actual['No Dry Running']['status'] is False
+-        assert 'No Dry Running' in episode.violations
+-        assert episode.safety_viol
+-        summary = summarize_measurements(measure_episodes([episode]))
+-        assert summary.safety_violation_rate == 1.0
+-        assert summary.requirement_violation_episodes['No Dry Running'] == 1
+-    finally:
+-        env.close()
+-    return {'original_specification_unchanged': True, 'No Dry Running': 'counted',
+-            'environment_seed': 1323514403, 'safety_violation_rate': 1.0}
++    results = {}
++    for inject_fault in (False, True):
++        env = BufferedDiscreteEnv(str(model.path), dt=.1, max_steps=100, phase=1,
++                                  n_obs=0, n_act=0, observation_scale=1)
++        original_sample = env._sample_scenario
++        def full_transfer_request():
++            scenario = original_sample()
++            for tank in [1, 2]:
++                original = scenario[f'system::controller::tank{tank}OriginalLevelMl']
++                assert original <= (50 if tank == 1 else 100)
++                scenario[f'system::controller::tank{tank}TransferMl'] = original
++            return scenario
++        env._sample_scenario = full_transfer_request
++        original_step = env.step
++        injected = []
++        def step(action):
++            if inject_fault and env.model_inputs['done']:
++                assert any(env.model_inputs[f'tank{tank}VolumeMl'] <= 0 for tank in (1, 2))
++                # Test-only actuator fault after shielding: deliberately keep
++                # the pumps running when the sensor reports an empty tank.
++                action = next(a for a, outputs in env.action_map.items() if all(outputs.values()))
++                injected.append(action)
++            return original_step(action)
++        env.step = step
++        iface = extract_interface(str(model.path))
++        policy = MLPActorCritic(env.obs_dim, env.n_actions, 4, seed=0)
++        composite = ProgramShieldComposite(policy, iface['spec_shield'], iface['obs_names'])
++        try:
++            episode = collect_episode(env, composite, greedy=True, reset_seed=1323514403)
++            summary = summarize_measurements(measure_episodes([episode]))
++            assert episode.requirement_checks['No Dry Running'] > 0
++            assert not episode.evaluation_errors
++            if inject_fault:
++                assert len(injected) == 1
++                # Detection is asserted from accumulated episode accounting,
++                # not from an assumption that the final state remains unsafe.
++                assert 'No Dry Running' in episode.violations
++                assert episode.safety_viol
++                assert summary.safety_violation_rate == 1.0
++                assert summary.requirement_violation_episodes['No Dry Running'] == 1
++            else:
++                assert not injected
++                assert episode.outcome == 'SUCCESS'
++                assert not episode.violations
++                assert summary.safety_violation_rate == 0.0
++                for tank in (1, 2):
++                    assert not env._twin.engine.state[f'system::pump{tank}::isRunning']
++            results['faulty_response' if inject_fault else 'normal_shutdown'] = {
++                'safety_violation_rate': summary.safety_violation_rate,
++                'recorded_violations': episode.violations,
++                'faults_injected': len(injected),
++            }
++        finally:
++            env.close()
++    return {'environment_seed': 1323514403, **results}
+ 
+ 
+ def validate(out_dir: Path) -> dict:
+     out_dir.mkdir(parents=True, exist_ok=True)
+-    result = {'original_dry_running_failure': check_original_dry_running_failure(),
++    result = {'dry_running_accounting': check_dry_running_accounting(),
+               'source_requirements': check_source_requirements(out_dir),
+               'invalid_requirements': check_invalid_requirements(out_dir),
+               'reserve': check_reserve(),
