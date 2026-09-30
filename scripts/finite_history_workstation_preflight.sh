@@ -76,6 +76,7 @@ env PYTHONPATH="$REPO_ROOT/src" "$PYTHON_BIN" - \
   "$RESULT_DIR/report.json" "$MEM_BYTES" "$CPU_COUNT" \
   "$FREE_BYTES" "$RECOMMENDED_JOBS" <<'PY'
 import importlib.util
+import importlib.metadata
 import json
 import platform
 import subprocess
@@ -85,12 +86,16 @@ from pathlib import Path
 report_path, mem_bytes, cpus, free_bytes, jobs = sys.argv[1:]
 try:
     import z3
-    z3_python = z3.get_version_string()
+    z3_engine = z3.get_version_string()
 except Exception as exc:
-    z3_python = None
+    z3_engine = None
     z3_import_error = f"{type(exc).__name__}: {exc}"
 else:
     z3_import_error = None
+try:
+    z3_distribution = importlib.metadata.version("z3-solver")
+except importlib.metadata.PackageNotFoundError:
+    z3_distribution = None
 try:
     binary = subprocess.run(
         ["z3", "--version"], text=True, capture_output=True, timeout=10
@@ -112,7 +117,8 @@ report = {
     "repository_free_bytes": int(free_bytes),
     "recommended_parallel_solver_jobs": int(jobs),
     "provisional_solver_memory_bytes_per_job": 12 * 1024**3,
-    "z3_python_version": z3_python,
+    "z3_python_version": z3_engine,
+    "z3_distribution_version": z3_distribution,
     "z3_python_import_error": z3_import_error,
     "z3_binary_version": z3_binary,
     "z3_required_version": "5.0.0.0",
@@ -120,7 +126,9 @@ report = {
         "clarity.certification.markov_z3"
     ) is not None,
 }
-report["z3_version_matches_requirement"] = z3_python == report["z3_required_version"]
+report["z3_version_matches_requirement"] = (
+    z3_distribution == report["z3_required_version"]
+)
 report["ready_for_solver_backend"] = bool(
     report["python_supported"]
     and report["wsl"]

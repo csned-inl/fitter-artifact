@@ -32,6 +32,8 @@ class WorkstationScriptTests(unittest.TestCase):
     def test_preflight_preserves_the_pinned_z3_version(self):
         text = SCRIPTS[0].read_text()
         self.assertIn('"z3_required_version": "5.0.0.0"', text)
+        self.assertIn('importlib.metadata.version("z3-solver")', text)
+        self.assertIn("z3_distribution == report", text)
         self.assertIn('pip install -r "$REPO_ROOT/requirements.txt"', text)
 
     def test_preflight_reuses_an_existing_environment(self):
