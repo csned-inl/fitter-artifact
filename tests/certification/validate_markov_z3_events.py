@@ -46,16 +46,13 @@ class ScalarEventTests(unittest.TestCase):
         )
 
     def test_complete_supported_event_inventory(self):
-        self.assertEqual(len(self.supported), 40)
+        self.assertEqual(len(self.supported), 51)
         self.assertEqual(
             {event.operation for event in self.supported}, SUPPORTED_OPERATIONS
         )
         for event in self.supported:
             encoding = self.encoding(event.node_id)
-            extra_locals = 1 if event.operation == "machine_from_state" else 0
-            self.assertEqual(
-                len(encoding.declarations), 2 * self.state_count + extra_locals
-            )
+            self.assertEqual(len(encoding.declarations), 2 * self.state_count)
             self.assertEqual(
                 len(encoding.frames) + len(event.writes), self.state_count
             )
@@ -91,8 +88,8 @@ class ScalarEventTests(unittest.TestCase):
         with self.assertRaises(UnsupportedLoweringError):
             compile_scalar_event(self.slice, self.source[event.node_id], event)
 
-    def test_unsupported_operation_fails_closed(self):
-        event = self.sliced["cycle/check"]
+    def test_unknown_operation_fails_closed(self):
+        event = replace(self.sliced["cycle/check"], operation="unknown")
         with self.assertRaises(UnsupportedLoweringError):
             compile_scalar_event(self.slice, self.source[event.node_id], event)
 
@@ -114,10 +111,24 @@ class ScalarEventTests(unittest.TestCase):
         self.assertIn("received_temperature_payload", accept.updates[0])
         self.assertIn(" false)", accept.updates[2])
 
-    def test_controller_command_send_remains_blocked(self):
-        event = self.sliced["system::controller/step/8/true/1"]
-        with self.assertRaises(UnsupportedLoweringError):
-            compile_scalar_event(self.slice, self.source[event.node_id], event)
+    def test_controller_commands_match_and_are_consumed_exactly(self):
+        send = self.encoding("system::controller/step/8/true/1")
+        entry = self.encoding("system::heater/machine/entry")
+        match = self.encoding("system::heater/machine/0/trigger")
+        finish = self.encoding("system::heater/machine/0/finish")
+        self.assertIn("slice:command:heater:on", send.updates[0])
+        self.assertIn("slice:machine:heater:saved_mode", entry.updates[0])
+        self.assertIn("slice:command:heater:on", match.branch_condition.text)
+        self.assertTrue(any("slice:command:heater:on" in update and "false" in update
+                            for update in finish.updates))
+
+    def test_requirements_accumulate_false_and_preserve_prior_error(self):
+        encoding = self.encoding("cycle/check")
+        self.assertEqual(len(encoding.updates), 6)
+        joined = "\n".join(encoding.updates)
+        self.assertIn("property_true", joined)
+        self.assertIn("property_false", joined)
+        self.assertEqual(joined.count(":error| |"), 3)
 
     def test_executed_action_is_decoded_by_exact_constructors(self):
         encoding = self.encoding("system::controller/step/3/resume")
@@ -131,7 +142,7 @@ class ScalarEventTests(unittest.TestCase):
     def test_machine_modes_use_saved_local_and_exact_constructor(self):
         source_test = self.encoding("system::heater/machine/0/from")
         finish = self.encoding("system::heater/machine/0/finish")
-        self.assertIn("saved-machine-mode", source_test.branch_condition.text)
+        self.assertIn("slice:machine:heater:saved_mode", source_test.branch_condition.text)
         self.assertIn("::reset", source_test.branch_condition.text)
         self.assertIn("::on", finish.updates[0])
 

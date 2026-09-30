@@ -111,6 +111,12 @@ def _interface_storages(ir: MarkovIR) -> tuple[IRStorage, ...]:
         _synthetic_storage("slice:shield:setPoint", "controller_memory", "Real", NativeSort.FLOAT64),
         _synthetic_storage("slice:shield:temperatureCelcius", "controller_memory", "Real", NativeSort.FLOAT64),
         _synthetic_storage("slice:shield:done", "intrinsic_terminal", "Boolean", NativeSort.BOOL),
+        _synthetic_storage("slice:machine:ac:saved_mode", "control_local", "HeaterBehaviorState", NativeSort.ENUM),
+        _synthetic_storage("slice:machine:heater:saved_mode", "control_local", "HeaterBehaviorState", NativeSort.ENUM),
+        _synthetic_storage("slice:command:ac:on", "transport_valid", "Boolean", NativeSort.BOOL),
+        _synthetic_storage("slice:command:ac:reset", "transport_valid", "Boolean", NativeSort.BOOL),
+        _synthetic_storage("slice:command:heater:on", "transport_valid", "Boolean", NativeSort.BOOL),
+        _synthetic_storage("slice:command:heater:reset", "transport_valid", "Boolean", NativeSort.BOOL),
     ]
     for name in ir.required_properties:
         slug = name.replace(" ", "_").lower()
@@ -210,6 +216,28 @@ def _event_dependencies(ir: MarkovIR, interval: FiniteDecisionInterval, map_key)
                 slug = name.replace(" ", "_").lower()
                 writes.update((f"slice:property:{slug}:status",
                                f"slice:property:{slug}:error"))
+        data = event.decoded_data()
+        if event.operation == "enter_machine":
+            machine = data["instance"].removeprefix("system::")
+            writes.add(f"slice:machine:{machine}:saved_mode")
+        elif event.operation == "machine_from_state":
+            machine = data["instance"].removeprefix("system::")
+            reads.add(f"slice:machine:{machine}:saved_mode")
+        elif event.operation == "send_copy" and data.get("destination") in {
+                "system::heater::cmdIn", "system::ac::cmdIn"}:
+            machine = data["destination"].split("::")[1]
+            command = {"onCmd": "on", "resetCmd": "reset"}[data["payload"]]
+            writes.add(f"slice:command:{machine}:{command}")
+        elif event.operation == "match_trigger":
+            machine = data["instance"].removeprefix("system::")
+            command = {
+                "HeatingCoolingOnCmd": "on",
+                "HeatingCoolingResetCmd": "reset",
+            }[data["type"]]
+            reads.add(f"slice:command:{machine}:{command}")
+        elif event.operation == "finish_machine_transition":
+            machine = data["instance"].removeprefix("system::")
+            writes.add(f"slice:command:{machine}:{data['to']}")
         result[node_id] = (reads, writes)
     return events, interval_nodes, result
 

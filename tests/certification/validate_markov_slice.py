@@ -54,6 +54,17 @@ class ThermostatRelevanceSliceTests(unittest.TestCase):
             NativeSort.RECORD, NativeSort.QUEUE, NativeSort.STACK,
         } for item in self.slice.storages))
 
+    def test_runtime_machine_locals_and_queues_have_exact_projection(self):
+        retained = {item.identity.uid for item in self.slice.storages}
+        self.assertTrue({
+            "slice:machine:ac:saved_mode",
+            "slice:machine:heater:saved_mode",
+            "slice:command:ac:on",
+            "slice:command:ac:reset",
+            "slice:command:heater:on",
+            "slice:command:heater:reset",
+        }.issubset(retained))
+
     def test_removed_relevant_storage_is_rejected(self):
         storages = tuple(item for item in self.slice.storages
                          if item.identity.uid != "semantic:physical_temperature")

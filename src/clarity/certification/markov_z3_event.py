@@ -28,10 +28,13 @@ _ENUM_CONSTRUCTORS = {
     "ExecutedAction": ("action_0", "action_1", "action_2", "action_3"),
     "PolicyProposal": ("proposal_0", "proposal_1", "proposal_2", "proposal_3"),
     "HeaterBehaviorState": ("reset", "on"),
+    "PropertyStatus": ("property_true", "property_false"),
+    "PropertyError": ("no_error", "evaluation_error"),
 }
 SUPPORTED_OPERATIONS |= {
     "accept_copy", "apply_executed_action", "call_machine", "completion_test", "decision",
-    "finish_machine_transition", "machine_from_state", "outcome", "return",
+    "enter_machine", "finish_machine_transition", "machine_from_state",
+    "match_trigger", "outcome", "return", "check_all_requirements",
     "send_copy", "solve_source_constraints",
 }
 
@@ -39,8 +42,6 @@ SUPPORTED_OPERATIONS |= {
 def supports_scalar_event(event: SlicedEvent) -> bool:
     if event.operation not in SUPPORTED_OPERATIONS:
         return False
-    if event.operation == "send_copy":
-        return event.node_id == "system::thermometer/step/4"
     return True
 
 
@@ -235,14 +236,25 @@ def compile_scalar_event(
             f"(or (= {action} {a2}) (= {action} {a3})))",
         ))
     elif event.operation == "finish_machine_transition":
-        if len(writes) != 1:
-            raise UnsupportedLoweringError("machine finish must write one mode")
-        target = next(iter(writes))
-        storage = state[target]
+        instance = data.get("instance")
+        mode_candidates = [storage for storage in state.values()
+                           if storage.identity.role == "machine_mode"
+                           and storage.identity.owner == instance]
+        if len(mode_candidates) != 1:
+            raise UnsupportedLoweringError("machine finish mode does not resolve")
+        storage = mode_candidates[0]
+        target = storage.identity.uid
+        machine = instance.removeprefix("system::")
+        command = f"slice:command:{machine}:{data.get('to')}"
+        if writes != {target, command}:
+            raise UnsupportedLoweringError("machine finish write identities mismatch")
         constructor = _enum_constructor(
             storage.identity.declared_type, data.get("to")
         )
-        updates.append(f"(= {exit_[target]} {constructor})")
+        updates.extend((
+            f"(= {exit_[target]} {constructor})",
+            f"(= {exit_[command]} false)",
+        ))
     elif event.operation == "machine_from_state":
         if writes:
             raise UnsupportedLoweringError("machine source test unexpectedly writes state")
@@ -253,12 +265,40 @@ def compile_scalar_event(
         if len(candidates) != 1:
             raise UnsupportedLoweringError("machine mode does not resolve uniquely")
         storage = candidates[0]
-        saved = quoted_symbol(local_namespace, "local", "saved-machine-mode")
-        declarations += ((saved, _storage_sort(storage)),)
+        machine = instance.removeprefix("system::")
+        saved_uid = f"slice:machine:{machine}:saved_mode"
+        if event.reads != (saved_uid,):
+            raise UnsupportedLoweringError("saved machine-mode read mismatch")
         expected = _enum_constructor(
             storage.identity.declared_type, data.get("expected")
         )
-        branch_condition = SMTTerm(f"(= {saved} {expected})", NativeSort.BOOL)
+        branch_condition = SMTTerm(
+            f"(= {entry[saved_uid]} {expected})", NativeSort.BOOL
+        )
+    elif event.operation == "enter_machine":
+        instance = data.get("instance")
+        machine = instance.removeprefix("system::")
+        saved_uid = f"slice:machine:{machine}:saved_mode"
+        mode_candidates = [storage.identity.uid for storage in state.values()
+                           if storage.identity.role == "machine_mode"
+                           and storage.identity.owner == instance]
+        if len(mode_candidates) != 1 or writes != {saved_uid}:
+            raise UnsupportedLoweringError("machine-entry snapshot identity mismatch")
+        updates.append(f"(= {exit_[saved_uid]} {entry[mode_candidates[0]]})")
+    elif event.operation == "match_trigger":
+        if writes:
+            raise UnsupportedLoweringError("trigger match unexpectedly writes state")
+        machine = data.get("instance", "").removeprefix("system::")
+        command_name = {
+            "HeatingCoolingOnCmd": "on",
+            "HeatingCoolingResetCmd": "reset",
+        }.get(data.get("type"))
+        if command_name is None:
+            raise UnsupportedLoweringError("unknown thermostat command type")
+        command = f"slice:command:{machine}:{command_name}"
+        if event.reads != (command,):
+            raise UnsupportedLoweringError("trigger command-presence read mismatch")
+        branch_condition = SMTTerm(entry[command], NativeSort.BOOL)
     elif event.operation in {"call_machine", "return", "outcome"}:
         if writes:
             raise UnsupportedLoweringError(
@@ -279,21 +319,29 @@ def compile_scalar_event(
             for target, source_uid in sorted(expected.items())
         )
     elif event.operation == "send_copy":
-        if event.node_id != "system::thermometer/step/4":
-            raise UnsupportedLoweringError(
-                "controller command transport awaits trigger-local composition"
-            )
-        expected_writes = {
-            "semantic:sent_temperature_payload",
-            "semantic:thermometer_payload_present",
-        }
-        payload = "graph:system::thermometer::temperatureReading::temperatureCelcius"
-        if writes != expected_writes or payload not in event.reads:
-            raise UnsupportedLoweringError("thermometer send-copy identity mismatch")
-        updates.extend((
-            f"(= {exit_['semantic:sent_temperature_payload']} {entry[payload]})",
-            f"(= {exit_['semantic:thermometer_payload_present']} true)",
-        ))
+        if event.node_id == "system::thermometer/step/4":
+            expected_writes = {
+                "semantic:sent_temperature_payload",
+                "semantic:thermometer_payload_present",
+            }
+            payload = "graph:system::thermometer::temperatureReading::temperatureCelcius"
+            if writes != expected_writes or payload not in event.reads:
+                raise UnsupportedLoweringError("thermometer send-copy identity mismatch")
+            updates.extend((
+                f"(= {exit_['semantic:sent_temperature_payload']} {entry[payload]})",
+                f"(= {exit_['semantic:thermometer_payload_present']} true)",
+            ))
+        else:
+            destination = data.get("destination", "")
+            payload = data.get("payload")
+            if destination not in {"system::heater::cmdIn", "system::ac::cmdIn"}:
+                raise UnsupportedLoweringError("unknown command transport destination")
+            machine = destination.split("::")[1]
+            command_name = {"onCmd": "on", "resetCmd": "reset"}.get(payload)
+            command = f"slice:command:{machine}:{command_name}"
+            if command_name is None or writes != {command}:
+                raise UnsupportedLoweringError("controller command-send identity mismatch")
+            updates.append(f"(= {exit_[command]} true)")
     elif event.operation == "accept_copy":
         expected_writes = {
             "semantic:received_temperature_payload",
@@ -316,6 +364,41 @@ def compile_scalar_event(
             f"{entry['semantic:sent_temperature_payload']})",
             f"(= {exit_['semantic:thermometer_payload_present']} false)",
         ))
+    elif event.operation == "check_all_requirements":
+        expressions = data.get("expressions")
+        properties = data.get("properties")
+        if not isinstance(expressions, dict) or not isinstance(properties, list) \
+                or set(expressions) != set(properties):
+            raise UnsupportedLoweringError("requirement expression inventory mismatch")
+        expected_writes = set()
+        for name in properties:
+            slug = name.replace(" ", "_").lower()
+            status_uid = f"slice:property:{slug}:status"
+            error_uid = f"slice:property:{slug}:error"
+            expected_writes.update((status_uid, error_uid))
+            term = compiler.compile(expressions[name])
+            if term.sort is not NativeSort.BOOL:
+                raise UnsupportedLoweringError(
+                    f"requirement result is not Boolean: {name}"
+                )
+            status_type = state[status_uid].identity.declared_type
+            error_type = state[error_uid].identity.declared_type
+            true_value = _enum_constructor(status_type, "property_true")
+            false_value = _enum_constructor(status_type, "property_false")
+            no_error = _enum_constructor(error_type, "no_error")
+            updates.extend((
+                f"(= {exit_[status_uid]} (ite (and "
+                f"(= {entry[status_uid]} {true_value}) {term.text}) "
+                f"{true_value} {false_value}))",
+                # Every checked thermostat requirement expression is total in
+                # this profile. Preserve any earlier error in the interval;
+                # the decision-boundary initializer later supplies no_error.
+                f"(= {exit_[error_uid]} {entry[error_uid]})",
+            ))
+            if no_error not in "\n".join(_sort_declarations(slice_)):
+                raise UnsupportedLoweringError("property-error constructor unavailable")
+        if writes != expected_writes:
+            raise UnsupportedLoweringError("requirement accumulator write mismatch")
 
     declared_names = {name for name, _ in declarations}
     expression_names = {name for name, _ in compiler.declarations}

@@ -115,7 +115,7 @@ class ThermostatObligationManifestTests(unittest.TestCase):
         self.assertEqual(metrics.history_cases, 3)
         self.assertEqual(metrics.solver_queries, 57)
         self.assertEqual(metrics.structural_predicates, 3)
-        self.assertEqual(metrics.retained_state_terms_per_run, 41)
+        self.assertEqual(metrics.retained_state_terms_per_run, 47)
         self.assertEqual(metrics.shared_buffer_slots, 7)
         self.assertEqual(metrics.generic_runtime_sorts, 0)
         self.assertTrue(check_formula_budget(metrics).accepted)
