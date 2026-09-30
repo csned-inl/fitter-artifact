@@ -22,6 +22,7 @@ TESTS=(
   tests/certification/validate_markov_obligations.py
   tests/certification/validate_markov_native_semantics.py
   tests/certification/validate_markov_z3_expressions.py
+  tests/certification/validate_markov_z3_control.py
   tests/certification/validate_markov_z3_backend.py
 )
 
