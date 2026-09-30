@@ -2,16 +2,26 @@
 
 `clarity.certification.markov_z3_transition` composes the checked 132-state,
 281-edge finite control DAG with all 51 retained event semantics and the 27
-proved identity-only block/no-op nodes. Each selected edge transports all 47
-typed state terms from its source exit to its target entry.
+proved identity-only block/no-op nodes.
 
-Event updates and frames are guarded by the active control state and successful
-evaluation. True/false, matched/absent, accepted/blocked, sent, call, return,
-next, and exception edges are equated to their exact event predicates. Source
-floating division records an explicit nonzero-divisor definedness condition;
-zero routes to the execution-error edge instead of inheriting SMT floating
-division's infinity behavior.
+Event-local lowering still produces and tests a complete 47-cell entry/exit
+SSA relation. Composition first validates that every retained write has exactly
+one update and every non-write has exactly one identity frame. It then removes
+those identities and carries unchanged values symbolically. The composed SMT
+relation allocates cells only for the 47 boundary inputs, 72 actual writes, and
+106 control-flow phi merges. Phi bridges group incoming edges that carry the
+same value. Exception and blocked-accept edges explicitly carry the pre-event
+state, so a failed update cannot leak an unconstrained post-state into an error
+outcome.
 
-The composed relation has 12,821 declarations and 13,207 guarded state bridges
-before boundary, shield, buffer, and visible-outcome equations are added. It is
-therefore a transition-kernel component, not yet a proof query or certificate.
+True/false, matched/absent, accepted/blocked, sent, call, return, next, and
+exception edges remain equated to their exact event predicates. Source floating
+division records an explicit nonzero-divisor definedness condition; zero routes
+to the execution-error edge instead of inheriting SMT floating division's
+infinity behavior.
+
+The sparse relation has 638 declarations and 264 grouped phi bridges and emits
+about 0.97 MiB of SMT-LIB, down from 12,821 declarations, 13,207 bridges, and
+about 12.46 MiB in the complete-frame composition. Boundary and all nine
+first-outcome state interfaces remain explicit. This is still a
+transition-kernel component, not yet a proof query or certificate.
