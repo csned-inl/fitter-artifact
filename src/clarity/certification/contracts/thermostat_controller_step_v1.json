@@ -1,0 +1,351 @@
+{
+  "schema": "clarity.controller-step-contract",
+  "version": 1,
+  "claim_scope": "formal_supported_profile_interface_only",
+  "model": {
+    "name": "thermostat",
+    "path": "src/clarity/models/thermostat/model.sysml",
+    "sha256": "44dec2333511c5cf7a40ad1828b612a043f9c7c71f6b960c276ce866f4a521aa",
+    "dt": 0.1
+  },
+  "decision_boundary": {
+    "request_node": "system::controller/step/3",
+    "resume_node": "system::controller/step/3/resume",
+    "entry": "after_executed_action_installation",
+    "exit": "first_next_decision_terminal_or_execution_error",
+    "completion_latched_before_pause": true,
+    "terminal_after_response_and_cycle_end": true
+  },
+  "observation": {
+    "policy_fields": [
+      "setPoint",
+      "temperatureCelcius"
+    ],
+    "raw_sources": {
+      "setPoint": "system::controller::setPointCelcius",
+      "temperatureCelcius": "system::controller::reading::temperatureCelcius"
+    },
+    "completion_input": "done",
+    "completion_source": "setPoint within tolerance of received temperature and both controller command flags false",
+    "observation_scale": 23.899216417910445,
+    "encoding": "float32(float(source_value) / observation_scale)",
+    "dtype": "float32"
+  },
+  "actions": {
+    "proposal_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "output_fields": [
+      "heaterState",
+      "acState"
+    ],
+    "action_map": {
+      "0": {
+        "heaterState": false,
+        "acState": false
+      },
+      "1": {
+        "heaterState": true,
+        "acState": false
+      },
+      "2": {
+        "heaterState": false,
+        "acState": true
+      },
+      "3": {
+        "heaterState": true,
+        "acState": true
+      }
+    },
+    "structurally_dead_proposals": [
+      3
+    ],
+    "availability": "fixed_full_policy_proposal_domain_before_shield",
+    "execution": "SpecShield.__call__(proposal, raw_pending_model_inputs)",
+    "shield_input": "raw_pending_model_inputs",
+    "history_records": "executed_action_after_spec_shield",
+    "important_dependency": "executed action remains source-state dependent until raw shield inputs are proved reconstructible from the Float32 buffer"
+  },
+  "buffer": {
+    "layout": [
+      "current_observation",
+      "past_observations_newest_first",
+      "past_executed_actions_newest_first_one_hot"
+    ],
+    "observation_padding": "float32_zero",
+    "action_padding": "float32_zero_vector",
+    "action_width": 4,
+    "reset_rule": "return current observation followed by zero histories, then retain that current observation as the first prior observation",
+    "step_rule": "push executed action, form next buffer from next observation and retained histories, then retain next observation"
+  },
+  "outcomes": {
+    "constructors": [
+      "continue",
+      "terminal",
+      "error"
+    ],
+    "reward_order_phase_2": [
+      "execution_or_requirement_evaluation_error => reward 0.0, error",
+      "false required property => reward -1.0, terminal violation",
+      "intrinsic simulator terminal => reward 1.0, terminal success",
+      "next decision => reward -0.01, continue"
+    ],
+    "time_limit_truncation": "wrapper_outcome_not_intrinsic_termination",
+    "truncation_rule": "if max_steps is reached after a continuing decision, replace reward with 0.0 and return TRUNCATED",
+    "visible_fields": [
+      "executed_action",
+      "outcome_constructor",
+      "next_buffer_when_continuing",
+      "reward",
+      "elapsed_simulator_ticks_and_time",
+      "intrinsic_termination",
+      "execution_or_evaluation_error",
+      "ordered_requirement_events"
+    ]
+  },
+  "required_properties": [
+    "No Simultaneous Heating and Cooling",
+    "Heat When Cold",
+    "Cool When Hot"
+  ],
+  "event_order": {
+    "step_programs": [
+      "system::environment",
+      "system::thermometer",
+      "system::controller",
+      "system"
+    ],
+    "event_kinds": {
+      "system::environment": [
+        "InParamStmt",
+        "AssignStmt"
+      ],
+      "system::thermometer": [
+        "InParamStmt",
+        "ItemDeclStmt",
+        "AssignStmt",
+        "AssignStmt",
+        "SendStmt"
+      ],
+      "system::controller": [
+        "InParamStmt",
+        "ItemDeclStmt",
+        "AcceptStmt",
+        "Decision",
+        "AssignStmt",
+        "AssignStmt",
+        "IfStmt",
+        "IfStmt",
+        "IfStmt",
+        "IfStmt"
+      ],
+      "system": [
+        "InParamStmt",
+        "AssignStmt"
+      ]
+    },
+    "decision_interval": [
+      "install executed action",
+      "complete controller assignments and synchronous command sends",
+      "complete remaining source step programs",
+      "advance engine time",
+      "evaluate every required property at cycle_end",
+      "return terminal if the pre-decision completion input was true",
+      "otherwise begin the next source cycle",
+      "process source-order machine transitions",
+      "solve source constraints",
+      "execute environment update",
+      "sample and send a copied thermometer payload",
+      "accept and remove the received payload",
+      "stop before applying the next policy response"
+    ]
+  },
+  "storage": [
+    {
+      "name": "physical_temperature",
+      "owner": "system::environment",
+      "path": [
+        "temperatureCelcius"
+      ],
+      "role": "physical",
+      "declared_type": "Real",
+      "source_storage": "system::environment::temperatureCelcius",
+      "origin": "indoor temperature"
+    },
+    {
+      "name": "held_temperature",
+      "owner": "system::thermometer",
+      "path": [
+        "lastReadingCelcius"
+      ],
+      "role": "sensor_held",
+      "declared_type": "Real",
+      "source_storage": "system::thermometer::lastReadingCelcius",
+      "origin": "indoor temperature"
+    },
+    {
+      "name": "sent_temperature_payload",
+      "owner": "system::thermometer",
+      "path": [
+        "upstreamPort",
+        "TemperatureReading",
+        "temperatureCelcius"
+      ],
+      "role": "payload_sent",
+      "declared_type": "Real",
+      "graph_storage": "$mailbox:system::controller::thermometerPort",
+      "origin": "indoor temperature"
+    },
+    {
+      "name": "received_temperature_payload",
+      "owner": "system::controller",
+      "path": [
+        "reading",
+        "temperatureCelcius"
+      ],
+      "role": "payload_received",
+      "declared_type": "Real",
+      "source_storage": "system::controller::reading::temperatureCelcius",
+      "origin": "indoor temperature"
+    },
+    {
+      "name": "heater_command_flag",
+      "owner": "system::controller",
+      "path": [
+        "heaterOn"
+      ],
+      "role": "actuator",
+      "declared_type": "Boolean",
+      "source_storage": "system::controller::heaterOn"
+    },
+    {
+      "name": "ac_command_flag",
+      "owner": "system::controller",
+      "path": [
+        "acOn"
+      ],
+      "role": "actuator",
+      "declared_type": "Boolean",
+      "source_storage": "system::controller::acOn"
+    },
+    {
+      "name": "heater_output",
+      "owner": "system::heater",
+      "path": [
+        "heatOut",
+        "heat",
+        "rateWatts"
+      ],
+      "role": "actuator",
+      "declared_type": "Real",
+      "source_storage": "system::heater::heatOut::heat::rateWatts"
+    },
+    {
+      "name": "ac_output",
+      "owner": "system::ac",
+      "path": [
+        "heatOut",
+        "heat",
+        "rateWatts"
+      ],
+      "role": "actuator",
+      "declared_type": "Real",
+      "source_storage": "system::ac::heatOut::heat::rateWatts"
+    },
+    {
+      "name": "heater_mode",
+      "owner": "system::heater",
+      "path": [
+        "heaterBehavior"
+      ],
+      "role": "machine_mode",
+      "declared_type": "HeaterBehaviorState",
+      "graph_storage": "$machine:system::heater"
+    },
+    {
+      "name": "ac_mode",
+      "owner": "system::ac",
+      "path": [
+        "heaterBehavior"
+      ],
+      "role": "machine_mode",
+      "declared_type": "HeaterBehaviorState",
+      "graph_storage": "$machine:system::ac"
+    },
+    {
+      "name": "source_time",
+      "owner": "system",
+      "path": [
+        "currentTime"
+      ],
+      "role": "clock_or_phase",
+      "declared_type": "Real",
+      "source_storage": "system::currentTime"
+    },
+    {
+      "name": "engine_time",
+      "owner": "formal_runtime",
+      "path": [
+        "engine_time"
+      ],
+      "role": "clock_or_phase",
+      "declared_type": "Real",
+      "graph_storage": "$engine_time"
+    },
+    {
+      "name": "set_point",
+      "owner": "system::controller",
+      "path": [
+        "setPointCelcius"
+      ],
+      "role": "immutable_parameter",
+      "declared_type": "Real",
+      "source_storage": "system::controller::setPointCelcius"
+    },
+    {
+      "name": "tolerance",
+      "owner": "system::controller",
+      "path": [
+        "toleranceCelcius"
+      ],
+      "role": "immutable_parameter",
+      "declared_type": "Real",
+      "source_storage": "system::controller::toleranceCelcius"
+    },
+    {
+      "name": "outside_temperature",
+      "owner": "system::environment",
+      "path": [
+        "outsideTemperatureCelcius"
+      ],
+      "role": "immutable_parameter",
+      "declared_type": "Real",
+      "source_storage": "system::environment::outsideTemperatureCelcius"
+    },
+    {
+      "name": "thermometer_payload_present",
+      "owner": "system::controller",
+      "path": [
+        "thermometerPort",
+        "TemperatureReading",
+        "present"
+      ],
+      "role": "transport_valid",
+      "declared_type": "Boolean",
+      "graph_storage": "$mailbox:system::controller::thermometerPort"
+    },
+    {
+      "name": "latched_completion",
+      "owner": "formal_runtime",
+      "path": [
+        "pending_completion"
+      ],
+      "role": "intrinsic_terminal",
+      "declared_type": "Boolean",
+      "graph_storage": "$pending_completion"
+    }
+  ]
+}
