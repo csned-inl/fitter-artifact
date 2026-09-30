@@ -133,6 +133,7 @@ report["ready_for_solver_backend"] = bool(
     report["python_supported"]
     and report["wsl"]
     and report["z3_version_matches_requirement"]
+    and report["markov_z3_module_present"]
 )
 Path(report_path).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 print(json.dumps(report, indent=2, sort_keys=True))

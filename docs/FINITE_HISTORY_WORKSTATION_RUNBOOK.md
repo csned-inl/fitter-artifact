@@ -64,4 +64,6 @@ FINITE_HISTORY_GATE_TIMEOUT_SECONDS=900 \
 
 The runner records stdout, stderr, compilation status, Z3 availability, and an
 explicit `certificate_claimed: false`. It cannot run or claim the final SMT
-proof until `markov_z3.py` and the certificate replay path are implemented.
+proof until production obligation lowering and full certificate replay are
+implemented. `z3_fixture_status: passed` confirms only the fail-closed solver
+boundary and its expected SAT/UNSAT smoke fixtures.

@@ -20,6 +20,7 @@ TESTS=(
   tests/certification/validate_markov_interval.py
   tests/certification/validate_markov_slice.py
   tests/certification/validate_markov_obligations.py
+  tests/certification/validate_markov_z3_backend.py
 )
 
 STATUS=0
@@ -52,12 +53,18 @@ try:
 except Exception:
     z3_version = None
 backend = importlib.util.find_spec("clarity.certification.markov_z3") is not None
+z3_fixtures = (
+    "passed" if z3_version is not None and status == "0"
+    else "not_run_z3_unavailable" if z3_version is None
+    else "failed"
+)
 record = {
     "schema": "clarity.finite-history-workstation-gates",
     "version": 1,
     "implemented_gate_status": "passed" if status == "0" else "failed",
     "z3_python_version": z3_version,
     "markov_z3_module_present": backend,
+    "z3_fixture_status": z3_fixtures,
     "solver_proof_status": (
         "not_run_backend_not_implemented" if not backend
         else "not_run_use_backend_certificate_runner"
