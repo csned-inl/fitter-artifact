@@ -1,0 +1,59 @@
+{
+  "schema": "clarity.thermostat-native-semantics",
+  "version": 1,
+  "claim_scope": "pre_z3_native_operation_and_interface_contract",
+  "source_files": {
+    "src/clarity/runtime/env.py": "3a7bc538befc243048b6fdc324fe5cd4bdce2b2c22fad35ffc662a4d878fd62a",
+    "src/clarity/runtime/requirements.py": "56518d7d7c8a9372ed37ccfd10017c557d48714a884db57331acdce5f084b3db",
+    "src/clarity/runtime/shield.py": "ade06833bb6d987701f523768db8919acf6654810d949ef8790ca25ae145fea4",
+    "src/clarity/training/reduced/buffered_env.py": "6c9dbede7eded4495b905724ca0c6eef1c5b6292916870c5ed918aedd318a723"
+  },
+  "operation_rules": {
+    "accept_copy": "consume_present_payload_into_distinct_received_storage",
+    "advance_engine_time": "binary64_entry_time_plus_configured_dt",
+    "apply_executed_action": "install_shield_selected_boolean_action",
+    "assign": "evaluate_entry_expression_then_single_exit_write",
+    "branch": "boolean_guard_selects_exactly_one_successor",
+    "call_machine": "push_finite_return_site_and_enter_machine",
+    "check_all_requirements": "ordered_lossless_false_and_error_accumulation",
+    "completion_test": "latched_completion_selects_terminal_or_next_cycle",
+    "decision": "emit_raw_inputs_latch_completion_and_pause",
+    "enter_machine": "snapshot_mode_and_begin_ordered_transition_scan",
+    "finish_machine_transition": "apply_do_action_consume_trigger_and_write_mode",
+    "machine_from_state": "compare_saved_entry_mode_to_transition_source",
+    "match_trigger": "first_compatible_message_or_absent_transition",
+    "outcome": "disjoint_terminal_or_execution_error_constructor",
+    "return": "pop_finite_return_site",
+    "send_copy": "copy_payload_into_distinct_sent_storage",
+    "set_dt": "copy_immutable_configured_dt",
+    "solve_source_constraints": "ordered_convergent_constraints_then_single_source_flows"
+  },
+  "shield": {
+    "proposal_domain": [0, 1, 2, 3],
+    "action_map": {
+      "0": {"heaterState": false, "acState": false},
+      "1": {"heaterState": true, "acState": false},
+      "2": {"heaterState": false, "acState": true},
+      "3": {"heaterState": true, "acState": true}
+    },
+    "dead_proposals": [3],
+    "required_action_order": [
+      "temperatureCelcius <= setPoint - tolerance => 1",
+      "temperatureCelcius >= setPoint + tolerance => 2",
+      "otherwise => 0"
+    ],
+    "history_records": "executed_action"
+  },
+  "observation": {
+    "scale": 23.899216417910445,
+    "operation_order": "binary64_divide_then_round_to_float32",
+    "fields": ["setPoint", "temperatureCelcius"]
+  },
+  "phase2_outcome_priority": [
+    {"condition": "execution_or_requirement_evaluation_error", "constructor": "error", "reward": 0.0},
+    {"condition": "false_required_property", "constructor": "terminal", "reward": -1.0},
+    {"condition": "intrinsic_simulator_terminal", "constructor": "terminal", "reward": 1.0},
+    {"condition": "next_decision", "constructor": "continue", "reward": -0.01}
+  ],
+  "time_limit_truncation": "excluded_wrapper_outcome"
+}
