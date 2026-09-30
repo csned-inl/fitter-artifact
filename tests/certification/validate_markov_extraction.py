@@ -41,6 +41,15 @@ class ThermostatMarkovExtractionTests(unittest.TestCase):
                     }]
         self.assertEqual(len(set(selected)), 4)
 
+    def test_constraint_solve_includes_all_flow_sources(self):
+        solve = next(event for event in self.ir.events if event.node_id == "cycle/solve")
+        reads = {access.storage_uid for access in solve.graph_reads}
+        self.assertTrue({
+            "graph:system::environment::temperatureCelcius",
+            "graph:system::heater::heatOut::heat::rateWatts",
+            "graph:system::ac::heatOut::heat::rateWatts",
+        }.issubset(reads))
+
     def test_mutated_native_sort_is_rejected(self):
         storage = list(self.ir.storages)
         index = next(i for i, item in enumerate(storage)

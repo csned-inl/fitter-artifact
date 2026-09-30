@@ -147,8 +147,8 @@ def _local_obligation(node_id: str, node: Mapping[str, Any]) -> LocalSimulationO
         raise ValueError(f"unsupported thermostat IR operation: {operation}")
     witness = node["data"].get("source_event") or "runtime:" + node_id
     premises = (
-        "reads=node_entry:" + ",".join(node["reads"]),
-        "writes=node_exit:" + ",".join(node["writes"]),
+        "reads=node_entry:" + ",".join(node["ir_reads"]),
+        "writes=node_exit:" + ",".join(node["ir_writes"]),
         "successors=" + canonical_json(node["successors"]),
         "operation_data_sha256=" + hashlib.sha256(
             canonical_json(node["data"]).encode()).hexdigest(),
@@ -168,6 +168,33 @@ def _local_obligation(node_id: str, node: Mapping[str, Any]) -> LocalSimulationO
             "entry/exit relation; all other storage follows the frame rule" + copy_note
         ),
     )
+
+
+def _flow_accesses(parser, inventory, graph) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Recover typed flow reads omitted by the legacy graph inventory."""
+
+    keys = set(inventory.value_types) | set(graph["storage"])
+
+    def stored_target(key: str) -> str:
+        seen = set()
+        while key in parser.parsed_bindings:
+            if key in seen:
+                raise ValueError(f"cyclic stored flow alias: {key}")
+            seen.add(key); key = parser.parsed_bindings[key]
+        return key
+
+    reads: set[str] = set()
+    writes: set[str] = set()
+    for flow in parser.flows:
+        start = parser.system_part + "::" + flow.from_port.replace(".", "::") + "::"
+        end = parser.system_part + "::" + flow.to_port.replace(".", "::") + "::"
+        matches = [key for key in keys if key.startswith(start)]
+        if not matches:
+            raise ValueError(f"flow has no typed source fields: {flow.from_port}")
+        for key in matches:
+            reads.add(stored_target(key))
+            writes.add(stored_target(end + key[len(start):]))
+    return tuple(sorted(reads)), tuple(sorted(writes))
 
 
 def extract_thermostat_markov_ir(
@@ -227,11 +254,15 @@ def extract_thermostat_markov_ir(
         ))
 
     bindings = _semantic_bindings(contract)
+    flow_reads, flow_writes = _flow_accesses(parser, inventory, graph)
     events: list[IREvent] = []
     for node_id, node in graph["nodes"].items():
         source_event = node["data"].get("source_event")
         reads = list(node["reads"])
         writes = list(node["writes"])
+        if node_id == "cycle/solve":
+            reads = sorted(set(reads) | set(flow_reads))
+            writes = sorted(set(writes) | set(flow_writes))
         events.append(IREvent(
             node_id=node_id,
             operation=node["operation"],
@@ -291,10 +322,13 @@ def extract_thermostat_markov_ir(
             name, visible_sort[name],
             "continuing_only" if name == "next_buffer_when_continuing" else "all_outcomes",
         ) for name in contract["outcomes"]["visible_fields"]),
-        local_obligations=tuple(
-            _local_obligation(node_id, node)
-            for node_id, node in graph["nodes"].items()
-        ),
+        local_obligations=tuple(_local_obligation(node_id, {
+            **node,
+            "ir_reads": (sorted(set(node["reads"]) | set(flow_reads))
+                         if node_id == "cycle/solve" else node["reads"]),
+            "ir_writes": (sorted(set(node["writes"]) | set(flow_writes))
+                          if node_id == "cycle/solve" else node["writes"]),
+        }) for node_id, node in graph["nodes"].items()),
         required_properties=tuple(contract["required_properties"]),
         decision_boundary=DecisionBoundary(
             request_node=boundary["request_node"],

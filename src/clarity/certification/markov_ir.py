@@ -8,7 +8,7 @@ irrelevant to the controller-facing theorem.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 import hashlib
 import json
@@ -195,6 +195,8 @@ class MarkovIR:
 def _json_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_value(asdict(value))
     if isinstance(value, dict):
         return {key: _json_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

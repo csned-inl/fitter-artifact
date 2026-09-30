@@ -45,6 +45,35 @@ def _error(errors: list[str], condition: bool, message: str) -> None:
         errors.append(message)
 
 
+def _source_flow_accesses(parser, inventory, graph) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Independent reconstruction of concrete field copies for SysML flows."""
+
+    universe = set(inventory.value_types).union(graph["storage"])
+
+    def resolve(key: str) -> str:
+        visited = set()
+        while key in parser.parsed_bindings:
+            if key in visited:
+                raise ValueError(f"cyclic stored flow alias: {key}")
+            visited.add(key)
+            key = parser.parsed_bindings[key]
+        return key
+
+    sources, destinations = set(), set()
+    for flow in parser.flows:
+        source_prefix = (parser.system_part + "::" +
+                         flow.from_port.replace(".", "::") + "::")
+        destination_prefix = (parser.system_part + "::" +
+                              flow.to_port.replace(".", "::") + "::")
+        fields = [key for key in universe if key.startswith(source_prefix)]
+        if not fields:
+            raise ValueError(f"untyped flow source: {flow.from_port}")
+        for field in fields:
+            sources.add(resolve(field))
+            destinations.add(resolve(destination_prefix + field[len(source_prefix):]))
+    return tuple(sorted(sources)), tuple(sorted(destinations))
+
+
 def validate_thermostat_markov_ir(
     ir: MarkovIR,
     *,
@@ -63,6 +92,7 @@ def validate_thermostat_markov_ir(
     parser = SysMLParser(str(selected)); parser.parse()
     inventory = build_execution_description(parser)
     graph = inventory.decision_transition
+    flow_reads, flow_writes = _source_flow_accesses(parser, inventory, graph)
 
     source_sha = hashlib.sha256(selected.read_bytes()).hexdigest()
     _error(errors, ir.source_sha256 == source_sha, "source hash mismatch")
@@ -133,10 +163,14 @@ def validate_thermostat_markov_ir(
         _error(errors, event.frame_rule == node["frame"], f"frame mismatch: {node_id}")
         _error(errors, event.on_exception == node["on_exception"],
                f"exception edge mismatch: {node_id}")
+        ir_reads = (sorted(set(node["reads"]) | set(flow_reads))
+                    if node_id == "cycle/solve" else node["reads"])
+        ir_writes = (sorted(set(node["writes"]) | set(flow_writes))
+                     if node_id == "cycle/solve" else node["writes"])
         expected_reads = tuple(("graph:" + key, AccessKind.READ, f"{node_id}:entry")
-                               for key in node["reads"])
+                               for key in ir_reads)
         expected_writes = tuple(("graph:" + key, AccessKind.WRITE, f"{node_id}:exit")
-                                for key in node["writes"])
+                                for key in ir_writes)
         actual_reads = tuple((a.storage_uid, a.kind, a.version) for a in event.graph_reads)
         actual_writes = tuple((a.storage_uid, a.kind, a.version) for a in event.graph_writes)
         _error(errors, actual_reads == expected_reads, f"graph reads mismatch: {node_id}")
@@ -206,9 +240,13 @@ def validate_thermostat_markov_ir(
         obligation = obligations.get(node_id)
         if obligation is None:
             continue
+        ir_reads = (sorted(set(node["reads"]) | set(flow_reads))
+                    if node_id == "cycle/solve" else node["reads"])
+        ir_writes = (sorted(set(node["writes"]) | set(flow_writes))
+                     if node_id == "cycle/solve" else node["writes"])
         expected_premises = (
-            "reads=node_entry:" + ",".join(node["reads"]),
-            "writes=node_exit:" + ",".join(node["writes"]),
+            "reads=node_entry:" + ",".join(ir_reads),
+            "writes=node_exit:" + ",".join(ir_writes),
             "successors=" + canonical_json(node["successors"]),
             "operation_data_sha256=" + hashlib.sha256(
                 canonical_json(node["data"]).encode()).hexdigest(),
