@@ -48,6 +48,10 @@ To inspect the machine without changing the Python environment:
 bash scripts/finite_history_workstation_preflight.sh
 ```
 
+When `.venv-finite-history` already exists, inspection automatically uses its
+interpreter. Set `PYTHON_BIN=/path/to/python` only to test a different explicit
+environment.
+
 ## Run implemented gates
 
 ```bash

@@ -39,6 +39,8 @@ class WorkstationScriptTests(unittest.TestCase):
     def test_preflight_reuses_an_existing_environment(self):
         text = SCRIPTS[0].read_text()
         self.assertIn('if [[ ! -x "$VENV/bin/python" ]]', text)
+        self.assertIn('elif [[ -x "$REPO_ROOT/.venv-finite-history/bin/python" ]]', text)
+        self.assertIn('PYTHON_BIN="$REPO_ROOT/.venv-finite-history/bin/python"', text)
         self.assertIn("environment-action.txt", text)
         self.assertIn("ready_for_solver_backend", text)
 

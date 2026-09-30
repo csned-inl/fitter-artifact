@@ -24,7 +24,13 @@ lscpu >"$RESULT_DIR/lscpu.txt" 2>&1 || true
 free -b >"$RESULT_DIR/memory.txt" 2>&1 || true
 df -B1 "$REPO_ROOT" >"$RESULT_DIR/disk.txt" 2>&1 || true
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  : # Honor an explicit interpreter override.
+elif [[ -x "$REPO_ROOT/.venv-finite-history/bin/python" ]]; then
+  PYTHON_BIN="$REPO_ROOT/.venv-finite-history/bin/python"
+else
+  PYTHON_BIN="python3"
+fi
 "$PYTHON_BIN" --version >"$RESULT_DIR/python-version.txt" 2>&1 || true
 
 if [[ $CREATE_VENV -eq 1 ]]; then
