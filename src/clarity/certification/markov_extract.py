@@ -260,6 +260,13 @@ def extract_thermostat_markov_ir(
         source_event = node["data"].get("source_event")
         reads = list(node["reads"])
         writes = list(node["writes"])
+        if node_id == "system::thermometer/step/4":
+            # The legacy queue node records the mailbox's prior value but omits
+            # the local payload field copied into it. Recover that source read
+            # explicitly so send-copy lowering cannot invent the payload.
+            reads = sorted(set(reads) | {
+                "system::thermometer::temperatureReading::temperatureCelcius"
+            })
         if node_id == "cycle/solve":
             reads = sorted(set(reads) | set(flow_reads))
             writes = sorted(set(writes) | set(flow_writes))
@@ -324,8 +331,13 @@ def extract_thermostat_markov_ir(
         ) for name in contract["outcomes"]["visible_fields"]),
         local_obligations=tuple(_local_obligation(node_id, {
             **node,
-            "ir_reads": (sorted(set(node["reads"]) | set(flow_reads))
-                         if node_id == "cycle/solve" else node["reads"]),
+            "ir_reads": (
+                sorted(set(node["reads"]) | set(flow_reads))
+                if node_id == "cycle/solve" else
+                sorted(set(node["reads"]) | {
+                    "system::thermometer::temperatureReading::temperatureCelcius"
+                }) if node_id == "system::thermometer/step/4" else node["reads"]
+            ),
             "ir_writes": (sorted(set(node["writes"]) | set(flow_writes))
                           if node_id == "cycle/solve" else node["writes"]),
         }) for node_id, node in graph["nodes"].items()),

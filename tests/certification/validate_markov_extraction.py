@@ -115,6 +115,15 @@ class ThermostatMarkovExtractionTests(unittest.TestCase):
         errors = self.validate(replace(self.ir, events=tuple(events)))
         self.assertTrue(any("send lacks" in error for error in errors))
 
+    def test_send_copy_records_the_local_payload_read(self):
+        send = next(event for event in self.ir.events
+                    if event.node_id == "system::thermometer/step/4")
+        reads = {access.storage_uid for access in send.graph_reads}
+        self.assertIn(
+            "graph:system::thermometer::temperatureReading::temperatureCelcius",
+            reads,
+        )
+
     def test_missing_boundary_is_rejected(self):
         boundary = replace(self.ir.decision_boundary, request_node="missing")
         errors = self.validate(replace(self.ir, decision_boundary=boundary))

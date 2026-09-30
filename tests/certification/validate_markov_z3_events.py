@@ -17,7 +17,9 @@ from clarity.certification.markov_extract import extract_thermostat_markov_ir
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import SolverStatus, UnsupportedLoweringError, run_smt2_query
-from clarity.certification.markov_z3_event import SCALAR_SORTS, SUPPORTED_OPERATIONS, compile_scalar_event
+from clarity.certification.markov_z3_event import (
+    SUPPORTED_OPERATIONS, compile_scalar_event, supports_scalar_event,
+)
 
 
 HAS_Z3 = importlib.util.find_spec("z3") is not None
@@ -34,12 +36,9 @@ class ScalarEventTests(unittest.TestCase):
         cls.sliced = {event.node_id: event for event in cls.slice.events}
         cls.supported = tuple(
             event for event in cls.slice.events
-            if event.operation in SUPPORTED_OPERATIONS
+            if supports_scalar_event(event)
         )
-        cls.scalar_count = sum(
-            storage.identity.native_sort in SCALAR_SORTS
-            for storage in cls.slice.storages
-        )
+        cls.state_count = len(cls.slice.storages)
 
     def encoding(self, node_id):
         return compile_scalar_event(
@@ -47,15 +46,18 @@ class ScalarEventTests(unittest.TestCase):
         )
 
     def test_complete_supported_event_inventory(self):
-        self.assertEqual(len(self.supported), 16)
+        self.assertEqual(len(self.supported), 40)
         self.assertEqual(
             {event.operation for event in self.supported}, SUPPORTED_OPERATIONS
         )
         for event in self.supported:
             encoding = self.encoding(event.node_id)
-            self.assertEqual(len(encoding.declarations), 2 * self.scalar_count)
+            extra_locals = 1 if event.operation == "machine_from_state" else 0
             self.assertEqual(
-                len(encoding.frames) + len(event.writes), self.scalar_count
+                len(encoding.declarations), 2 * self.state_count + extra_locals
+            )
+            self.assertEqual(
+                len(encoding.frames) + len(event.writes), self.state_count
             )
 
     def test_environment_assignment_uses_ieee_update_and_frames(self):
@@ -75,7 +77,7 @@ class ScalarEventTests(unittest.TestCase):
         self.assertIsNotNone(encoding.branch_condition)
         self.assertIn("(not ", encoding.branch_condition.text)
         self.assertEqual(len(encoding.updates), 0)
-        self.assertEqual(len(encoding.frames), self.scalar_count)
+        self.assertEqual(len(encoding.frames), self.state_count)
 
     def test_dt_and_engine_time_updates_are_exact(self):
         dt = self.encoding("cycle/dt").updates[0]
@@ -90,9 +92,55 @@ class ScalarEventTests(unittest.TestCase):
             compile_scalar_event(self.slice, self.source[event.node_id], event)
 
     def test_unsupported_operation_fails_closed(self):
-        event = self.sliced["system::thermometer/step/4"]
+        event = self.sliced["cycle/check"]
         with self.assertRaises(UnsupportedLoweringError):
             compile_scalar_event(self.slice, self.source[event.node_id], event)
+
+    def test_constraint_solve_is_four_exact_copies(self):
+        encoding = self.encoding("cycle/solve")
+        self.assertEqual(len(encoding.updates), 4)
+        joined = "\n".join(encoding.updates)
+        for source in ("semantic:ac_output", "semantic:heater_output",
+                       "semantic:held_temperature", "semantic:physical_temperature"):
+            self.assertIn(source, joined)
+
+    def test_thermometer_send_and_accept_are_distinct_copies(self):
+        send = self.encoding("system::thermometer/step/4")
+        accept = self.encoding("system::controller/step/2")
+        self.assertIn("temperatureReading::temperatureCelcius", send.updates[0])
+        self.assertIn(" true)", send.updates[1])
+        self.assertIsNotNone(accept.precondition)
+        self.assertIn("thermometer_payload_present", accept.precondition.text)
+        self.assertIn("received_temperature_payload", accept.updates[0])
+        self.assertIn(" false)", accept.updates[2])
+
+    def test_controller_command_send_remains_blocked(self):
+        event = self.sliced["system::controller/step/8/true/1"]
+        with self.assertRaises(UnsupportedLoweringError):
+            compile_scalar_event(self.slice, self.source[event.node_id], event)
+
+    def test_executed_action_is_decoded_by_exact_constructors(self):
+        encoding = self.encoding("system::controller/step/3/resume")
+        self.assertEqual(len(encoding.updates), 2)
+        joined = "\n".join(encoding.updates)
+        for constructor in ("action_1", "action_2", "action_3"):
+            self.assertIn(constructor, joined)
+        self.assertTrue(any("ExecutedAction" in item
+                            for item in encoding.sort_declarations))
+
+    def test_machine_modes_use_saved_local_and_exact_constructor(self):
+        source_test = self.encoding("system::heater/machine/0/from")
+        finish = self.encoding("system::heater/machine/0/finish")
+        self.assertIn("saved-machine-mode", source_test.branch_condition.text)
+        self.assertIn("::reset", source_test.branch_condition.text)
+        self.assertIn("::on", finish.updates[0])
+
+    def test_decision_latches_and_completion_reads_boolean(self):
+        decision = self.encoding("system::controller/step/3")
+        completion = self.encoding("cycle/terminal")
+        self.assertIn("semantic:latched_completion", decision.updates[0])
+        self.assertIsNotNone(completion.branch_condition)
+        self.assertIn("semantic:latched_completion", completion.branch_condition.text)
 
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
     def test_every_supported_relation_is_satisfiable_in_pinned_z3(self):

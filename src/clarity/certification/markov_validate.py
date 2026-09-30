@@ -163,8 +163,13 @@ def validate_thermostat_markov_ir(
         _error(errors, event.frame_rule == node["frame"], f"frame mismatch: {node_id}")
         _error(errors, event.on_exception == node["on_exception"],
                f"exception edge mismatch: {node_id}")
-        ir_reads = (sorted(set(node["reads"]) | set(flow_reads))
-                    if node_id == "cycle/solve" else node["reads"])
+        ir_reads = (
+            sorted(set(node["reads"]) | set(flow_reads))
+            if node_id == "cycle/solve" else
+            sorted(set(node["reads"]) | {
+                "system::thermometer::temperatureReading::temperatureCelcius"
+            }) if node_id == "system::thermometer/step/4" else node["reads"]
+        )
         ir_writes = (sorted(set(node["writes"]) | set(flow_writes))
                      if node_id == "cycle/solve" else node["writes"])
         expected_reads = tuple(("graph:" + key, AccessKind.READ, f"{node_id}:entry")
@@ -240,8 +245,13 @@ def validate_thermostat_markov_ir(
         obligation = obligations.get(node_id)
         if obligation is None:
             continue
-        ir_reads = (sorted(set(node["reads"]) | set(flow_reads))
-                    if node_id == "cycle/solve" else node["reads"])
+        ir_reads = (
+            sorted(set(node["reads"]) | set(flow_reads))
+            if node_id == "cycle/solve" else
+            sorted(set(node["reads"]) | {
+                "system::thermometer::temperatureReading::temperatureCelcius"
+            }) if node_id == "system::thermometer/step/4" else node["reads"]
+        )
         ir_writes = (sorted(set(node["writes"]) | set(flow_writes))
                      if node_id == "cycle/solve" else node["writes"])
         expected_premises = (
