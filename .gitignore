@@ -5,6 +5,7 @@ build/
 .venv/
 /.venv-finite-history/
 /runs/
+/.codex-workstation/
 __pycache__/
 *.pyc
 ._*

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = (
     ROOT / "scripts/finite_history_workstation_preflight.sh",
     ROOT / "scripts/finite_history_workstation_gates.sh",
+    ROOT / "scripts/finite_history_workstation_cycle.sh",
 )
 
 
@@ -48,6 +49,15 @@ class WorkstationScriptTests(unittest.TestCase):
         ignore = (ROOT / ".gitignore").read_text().splitlines()
         self.assertIn("/.venv-finite-history/", ignore)
         self.assertIn("/runs/", ignore)
+        self.assertIn("/.codex-workstation/", ignore)
+
+    def test_cycle_is_locked_fast_forward_only_and_inventory_aware(self):
+        text = SCRIPTS[2].read_text()
+        self.assertIn("flock -n 9", text)
+        self.assertIn("merge --ff-only", text)
+        self.assertIn("latest.json", text)
+        self.assertIn("wsl-inventory", text)
+        self.assertNotIn("reset --hard", text)
 
 
 if __name__ == "__main__":
