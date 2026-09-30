@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from clarity.certification.markov_ir import NativeSort
 from clarity.certification.markov_z3 import (
     QueryResult,
+    SOLVER_PIPELINE,
     SolverStatus,
     UnsupportedLoweringError,
     canonical_smt2,
@@ -58,6 +59,12 @@ HIDDEN_STATE_COUNTEREXAMPLE = """
 
 
 class SolverIndependentBoundaryTests(unittest.TestCase):
+    def test_solver_pipeline_is_fixed_and_evidence_visible(self):
+        self.assertEqual(
+            SOLVER_PIPELINE,
+            ("simplify", "propagate-values", "solve-eqs", "smt"),
+        )
+
     def test_query_hash_is_whitespace_stable_at_line_ends(self):
         mutated = "\n".join(line + "   " for line in DIRECT_OBSERVATION.splitlines())
         self.assertEqual(query_sha256(DIRECT_OBSERVATION), query_sha256(mutated))
@@ -95,6 +102,8 @@ class Z3FixtureTests(unittest.TestCase):
     def test_direct_observation_fixture_is_unsat_and_replays(self):
         result = run_smt2_query(DIRECT_OBSERVATION, timeout_ms=30_000)
         self.assertIs(result.status, SolverStatus.UNSAT, result.reason)
+        self.assertIn("tactic=simplify>propagate-values>solve-eqs>smt",
+                      result.solver_identity)
         replay = replay_query(DIRECT_OBSERVATION, result, timeout_ms=30_000)
         self.assertIs(replay.status, SolverStatus.UNSAT, replay.reason)
         self.assertEqual(result.query_sha256, replay.query_sha256)

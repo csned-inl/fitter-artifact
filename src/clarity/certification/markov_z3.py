@@ -21,6 +21,7 @@ from .markov_ir import NativeSort
 
 QUERY_SCHEMA = "clarity.markov-z3-query-result"
 QUERY_VERSION = 1
+SOLVER_PIPELINE = ("simplify", "propagate-values", "solve-eqs", "smt")
 
 
 class SolverStatus(str, Enum):
@@ -91,8 +92,23 @@ def _load_z3():
 def solver_identity(z3=None) -> str:
     z3 = _load_z3() if z3 is None else z3
     if hasattr(z3, "get_full_version"):
-        return str(z3.get_full_version())
-    return "Z3 " + str(z3.get_version_string())
+        version = str(z3.get_full_version())
+    else:
+        version = "Z3 " + str(z3.get_version_string())
+    return version + "; tactic=" + ">".join(SOLVER_PIPELINE)
+
+
+def _new_solver(z3):
+    """Build the fixed, evidence-visible solver pipeline.
+
+    The first three tactics are exact Z3 preprocessing passes.  In
+    particular, ``solve-eqs`` eliminates the large family of definitional
+    SSA and state-bridge equalities before the final SMT search.  A solver
+    produced from the tactic retains Z3's model converters, so SAT results
+    still expose models in the original query vocabulary.
+    """
+
+    return z3.Then(*(z3.Tactic(name) for name in SOLVER_PIPELINE)).solver()
 
 
 def native_z3_sort(native_sort: NativeSort, *, z3=None):
@@ -137,7 +153,7 @@ def run_smt2_query(query: str, *, timeout_ms: int = 300_000) -> QueryResult:
         z3 = _load_z3()
         identity = solver_identity(z3)
         expressions = z3.parse_smt2_string(canonical)
-        solver = z3.Solver()
+        solver = _new_solver(z3)
         solver.set(timeout=timeout_ms)
         solver.add(*list(expressions))
         answer = solver.check()

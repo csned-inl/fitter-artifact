@@ -11,6 +11,15 @@ finite-history proof. Its current scope is intentionally narrow:
 - reject generic runtime containers and enums without checked constructors;
 - rerun only exact-hash SAT/UNSAT evidence with the recorded solver identity.
 
+The solver identity includes the fixed
+`simplify > propagate-values > solve-eqs > smt` tactic pipeline. The first
+three exact Z3 preprocessing passes remove definitional SSA and state-bridge
+equalities before the final search. This changes neither the asserted formula
+nor the SAT/UNSAT meaning, and Z3's tactic solver retains model converters so
+SAT models remain expressed in the original query vocabulary. Recording the
+pipeline in the identity makes replay reject a silently changed solver
+configuration.
+
 The direct-observation fixture must be `UNSAT`; the hidden-state fixture must
 be `SAT`. These fixtures validate the solver boundary but do not establish the
 thermostat theorem.
