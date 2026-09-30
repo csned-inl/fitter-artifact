@@ -12,6 +12,8 @@ TIMEOUT_SECONDS="${FINITE_HISTORY_GATE_TIMEOUT_SECONDS:-300}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RESULT_DIR="$REPO_ROOT/runs/finite-history-gates-$STAMP"
 mkdir -p "$RESULT_DIR"
+CHECK_INDEX="$RESULT_DIR/checks.tsv"
+: >"$CHECK_INDEX"
 
 TESTS=(
   tests/certification/validate_markov_reference.py
@@ -26,59 +28,47 @@ TESTS=(
   tests/certification/validate_markov_z3_events.py
   tests/certification/validate_markov_z3_transition.py
   tests/certification/validate_markov_z3_backend.py
+  tests/certification/validate_gate_reporting.py
 )
 
 STATUS=0
 for test_path in "${TESTS[@]}"; do
   name="$(basename "$test_path" .py)"
-  if ! timeout --signal=TERM --kill-after=15s "$TIMEOUT_SECONDS" \
+  started_ns="$(date +%s%N)"
+  if timeout --signal=TERM --kill-after=15s "$TIMEOUT_SECONDS" \
       env PYTHONPATH="$REPO_ROOT/src" "$PYTHON_BIN" "$REPO_ROOT/$test_path" \
       >"$RESULT_DIR/$name.out" 2>"$RESULT_DIR/$name.err"; then
+    check_status=0
+  else
+    check_status=$?
     STATUS=1
   fi
+  ended_ns="$(date +%s%N)"
+  duration_ms=$(((ended_ns - started_ns) / 1000000))
+  printf '%s\t%s\t%s\t%s\n' \
+    "$name" "$test_path" "$check_status" "$duration_ms" >>"$CHECK_INDEX"
 done
 
-if ! env PYTHONPATH="$REPO_ROOT/src" "$PYTHON_BIN" -m compileall -q \
+started_ns="$(date +%s%N)"
+if env PYTHONPATH="$REPO_ROOT/src" "$PYTHON_BIN" -m compileall -q \
     "$REPO_ROOT/src" "$REPO_ROOT/tests" \
     >"$RESULT_DIR/compileall.out" 2>"$RESULT_DIR/compileall.err"; then
+  compile_status=0
+else
+  compile_status=$?
   STATUS=1
 fi
+ended_ns="$(date +%s%N)"
+duration_ms=$(((ended_ns - started_ns) / 1000000))
+printf '%s\t%s\t%s\t%s\n' \
+  "compileall" "python_compileall" "$compile_status" "$duration_ms" >>"$CHECK_INDEX"
 
-env PYTHONPATH="$REPO_ROOT/src" "$PYTHON_BIN" - "$RESULT_DIR/summary.json" \
-  "$STATUS" <<'PY'
-import importlib.util
-import json
-import sys
-from pathlib import Path
-
-path, status = sys.argv[1:]
-try:
-    import z3
-    z3_version = z3.get_version_string()
-except Exception:
-    z3_version = None
-backend = importlib.util.find_spec("clarity.certification.markov_z3") is not None
-z3_fixtures = (
-    "passed" if z3_version is not None and status == "0"
-    else "not_run_z3_unavailable" if z3_version is None
-    else "failed"
-)
-record = {
-    "schema": "clarity.finite-history-workstation-gates",
-    "version": 1,
-    "implemented_gate_status": "passed" if status == "0" else "failed",
-    "z3_python_version": z3_version,
-    "markov_z3_module_present": backend,
-    "z3_fixture_status": z3_fixtures,
-    "solver_proof_status": (
-        "not_run_backend_not_implemented" if not backend
-        else "not_run_use_backend_certificate_runner"
-    ),
-    "certificate_claimed": False,
-}
-Path(path).write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-print(json.dumps(record, indent=2, sort_keys=True))
-PY
+env PYTHONPATH="$REPO_ROOT/src" "$PYTHON_BIN" \
+  "$REPO_ROOT/scripts/finite_history_gate_report.py" \
+  --index "$CHECK_INDEX" \
+  --result-dir "$RESULT_DIR" \
+  --repo-root "$REPO_ROOT" \
+  --output "$RESULT_DIR/summary.json"
 
 echo "Gate evidence: $RESULT_DIR"
 exit "$STATUS"

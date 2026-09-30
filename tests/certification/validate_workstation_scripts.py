@@ -14,6 +14,7 @@ SCRIPTS = (
     ROOT / "scripts/finite_history_workstation_gates.sh",
     ROOT / "scripts/finite_history_workstation_cycle.sh",
 )
+REPORTER = ROOT / "scripts/finite_history_gate_report.py"
 
 
 class WorkstationScriptTests(unittest.TestCase):
@@ -26,8 +27,11 @@ class WorkstationScriptTests(unittest.TestCase):
 
     def test_gate_runner_never_claims_a_certificate(self):
         text = SCRIPTS[1].read_text()
-        self.assertIn('"certificate_claimed": False', text)
-        self.assertIn("not_run_backend_not_implemented", text)
+        reporter = REPORTER.read_text()
+        self.assertIn('"certificate_claimed": False', reporter)
+        self.assertIn("not_run_backend_not_implemented", reporter)
+        self.assertIn("checks.tsv", text)
+        self.assertIn("finite_history_gate_report.py", text)
         self.assertNotIn('"certificate_claimed": True', text)
 
     def test_preflight_preserves_the_pinned_z3_version(self):
@@ -57,6 +61,7 @@ class WorkstationScriptTests(unittest.TestCase):
         self.assertIn("merge --ff-only", text)
         self.assertIn("latest.json", text)
         self.assertIn("wsl-inventory", text)
+        self.assertIn("retained for automatic retry", text)
         self.assertNotIn("reset --hard", text)
 
 

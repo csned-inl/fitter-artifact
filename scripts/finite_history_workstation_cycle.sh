@@ -136,9 +136,13 @@ inventory_status=0
 if ((DO_INVENTORY)); then
   if command -v wsl-inventory >/dev/null 2>&1; then
     echo "Publishing the sanitized result through WSL inventory..."
-    wsl-inventory --quiet || inventory_status=$?
+    if wsl-inventory --quiet; then
+      echo "Sanitized workstation result published."
+    else
+      inventory_status=$?
+    fi
     if ((inventory_status)); then
-      echo "WSL inventory publication failed; the local result was retained." >&2
+      echo "WSL inventory publication failed; the local result was retained for automatic retry." >&2
     fi
   else
     echo "wsl-inventory is not installed; the local result was retained." >&2
