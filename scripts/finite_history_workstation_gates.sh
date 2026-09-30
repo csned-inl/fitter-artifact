@@ -24,6 +24,7 @@ TESTS=(
   tests/certification/validate_markov_z3_expressions.py
   tests/certification/validate_markov_z3_control.py
   tests/certification/validate_markov_z3_events.py
+  tests/certification/validate_markov_z3_transition.py
   tests/certification/validate_markov_z3_backend.py
 )
 

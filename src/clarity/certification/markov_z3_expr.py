@@ -24,6 +24,7 @@ class SMTTerm:
     text: str
     sort: NativeSort
     literal: int | float | bool | None = None
+    defined: tuple[str, ...] = ()
 
 
 def smt_sort(sort: NativeSort) -> str:
@@ -143,7 +144,8 @@ class ThermostatExpressionCompiler:
         operand = self.compile(expression.get("operand"))
         if operator == "not":
             self._boolean(operand, operator)
-            return SMTTerm(f"(not {operand.text})", NativeSort.BOOL)
+            return SMTTerm(f"(not {operand.text})", NativeSort.BOOL,
+                           defined=operand.defined)
         raise UnsupportedLoweringError(f"unsupported unary operator: {operator!r}")
 
     def _binary(self, expression: dict[str, Any]) -> SMTTerm:
@@ -154,13 +156,16 @@ class ThermostatExpressionCompiler:
             self._boolean(left, operator)
             self._boolean(right, operator)
             smt_operator = "=>" if operator == "implies" else operator
-            return SMTTerm(f"({smt_operator} {left.text} {right.text})", NativeSort.BOOL)
+            return SMTTerm(f"({smt_operator} {left.text} {right.text})", NativeSort.BOOL,
+                           defined=left.defined + right.defined)
 
         left, right = self._coerce_pair(left, right)
         if operator == "==":
             if left.sort in {NativeSort.FLOAT32, NativeSort.FLOAT64}:
-                return SMTTerm(f"(fp.eq {left.text} {right.text})", NativeSort.BOOL)
-            return SMTTerm(f"(= {left.text} {right.text})", NativeSort.BOOL)
+                return SMTTerm(f"(fp.eq {left.text} {right.text})", NativeSort.BOOL,
+                               defined=left.defined + right.defined)
+            return SMTTerm(f"(= {left.text} {right.text})", NativeSort.BOOL,
+                           defined=left.defined + right.defined)
         if operator in {"<", "<=", ">", ">="}:
             if left.sort in {NativeSort.FLOAT32, NativeSort.FLOAT64}:
                 name = {"<": "fp.lt", "<=": "fp.leq", ">": "fp.gt", ">=": "fp.geq"}[operator]
@@ -170,15 +175,21 @@ class ThermostatExpressionCompiler:
                 raise UnsupportedLoweringError(
                     f"ordered comparison is unsupported for {left.sort.value}"
                 )
-            return SMTTerm(f"({name} {left.text} {right.text})", NativeSort.BOOL)
+            return SMTTerm(f"({name} {left.text} {right.text})", NativeSort.BOOL,
+                           defined=left.defined + right.defined)
         if operator in {"+", "-", "*", "/"}:
             if left.sort in {NativeSort.FLOAT32, NativeSort.FLOAT64}:
                 name = {"+": "fp.add", "-": "fp.sub", "*": "fp.mul", "/": "fp.div"}[operator]
+                defined = left.defined + right.defined
+                if operator == "/":
+                    defined += (f"(not (fp.isZero {right.text}))",)
                 return SMTTerm(
-                    f"({name} RNE {left.text} {right.text})", left.sort
+                    f"({name} RNE {left.text} {right.text})", left.sort,
+                    defined=defined,
                 )
             if left.sort is NativeSort.INT and operator != "/":
-                return SMTTerm(f"({operator} {left.text} {right.text})", NativeSort.INT)
+                return SMTTerm(f"({operator} {left.text} {right.text})", NativeSort.INT,
+                               defined=left.defined + right.defined)
             raise UnsupportedLoweringError(
                 f"arithmetic operator {operator!r} is unsupported for {left.sort.value}"
             )

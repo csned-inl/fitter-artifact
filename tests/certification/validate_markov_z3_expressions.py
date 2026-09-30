@@ -65,6 +65,8 @@ class ExpressionLoweringTests(unittest.TestCase):
         for operator in ("fp.add", "fp.sub", "fp.mul", "fp.div"):
             self.assertIn(operator, term.text)
         self.assertIn("RNE", term.text)
+        self.assertEqual(len(term.defined), 1)
+        self.assertIn("fp.isZero", term.defined[0])
 
     def test_live_expression_resolves_to_held_temperature(self):
         expression = self.events["cycle/check"].decoded_data()["expressions"]["Heat When Cold"]

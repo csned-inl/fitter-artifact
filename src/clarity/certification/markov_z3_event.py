@@ -60,10 +60,12 @@ class ScalarEventEncoding:
     frames: tuple[str, ...]
     branch_condition: SMTTerm | None
     precondition: SMTTerm | None
+    exception_condition: SMTTerm
 
     @property
     def assertions(self) -> tuple[str, ...]:
         prefix = () if self.precondition is None else (self.precondition.text,)
+        prefix += (f"(not {self.exception_condition.text})",)
         return prefix + self.updates + self.frames
 
     def smt2(self, *extra_assertions: str) -> str:
@@ -167,12 +169,14 @@ def compile_scalar_event(
     updates: list[str] = []
     branch_condition: SMTTerm | None = None
     precondition: SMTTerm | None = None
+    defined_conditions: list[str] = []
 
     if event.operation == "assign":
         if len(writes) != 1:
             raise UnsupportedLoweringError("scalar assignment must write exactly one storage")
         target = next(iter(writes))
         term = compiler.compile(data.get("expression"))
+        defined_conditions.extend(term.defined)
         target_sort = state[target].identity.native_sort
         if term.sort is not target_sort:
             raise UnsupportedLoweringError(
@@ -183,6 +187,7 @@ def compile_scalar_event(
         if writes:
             raise UnsupportedLoweringError("branch unexpectedly writes scalar state")
         branch_condition = compiler.compile(data.get("condition"))
+        defined_conditions.extend(branch_condition.defined)
         if branch_condition.sort not in {NativeSort.BOOL, NativeSort.PRESENCE}:
             raise UnsupportedLoweringError("branch guard is not Boolean")
     elif event.operation == "set_dt":
@@ -208,6 +213,7 @@ def compile_scalar_event(
                 "setPoint", "temperatureCelcius", "done"}:
             raise UnsupportedLoweringError("decision input signature mismatch")
         term = compiler.compile(inputs["done"])
+        defined_conditions.extend(term.defined)
         if term.sort is not NativeSort.BOOL:
             raise UnsupportedLoweringError("decision completion input is not Boolean")
         updates.append(f"(= {exit_['semantic:latched_completion']} {term.text})")
@@ -377,6 +383,7 @@ def compile_scalar_event(
             error_uid = f"slice:property:{slug}:error"
             expected_writes.update((status_uid, error_uid))
             term = compiler.compile(expressions[name])
+            defined_conditions.extend(term.defined)
             if term.sort is not NativeSort.BOOL:
                 raise UnsupportedLoweringError(
                     f"requirement result is not Boolean: {name}"
@@ -408,6 +415,16 @@ def compile_scalar_event(
         f"(= {exit_[uid]} {entry[uid]})"
         for uid in sorted(set(state) - writes)
     )
+    if not defined_conditions:
+        exception_condition = SMTTerm("false", NativeSort.BOOL)
+    elif len(defined_conditions) == 1:
+        exception_condition = SMTTerm(
+            f"(not {defined_conditions[0]})", NativeSort.BOOL
+        )
+    else:
+        exception_condition = SMTTerm(
+            f"(not (and {' '.join(defined_conditions)}))", NativeSort.BOOL
+        )
     return ScalarEventEncoding(
         node_id=event.node_id,
         operation=event.operation,
@@ -418,4 +435,46 @@ def compile_scalar_event(
         frames=frames,
         branch_condition=branch_condition,
         precondition=precondition,
+        exception_condition=exception_condition,
+    )
+
+
+def compile_identity_event(
+    slice_: TheoremSlice,
+    node_id: str,
+    operation: str,
+    *,
+    namespace: str = "run",
+) -> ScalarEventEncoding:
+    """Lower a checked dead begin/block/no-op node as a complete identity."""
+
+    if operation not in {"begin_cycle", "enter_block", "no_op"}:
+        raise UnsupportedLoweringError(
+            f"operation is not an approved identity node: {operation}"
+        )
+    state = {storage.identity.uid: storage for storage in slice_.storages}
+    token = hashlib.sha256(node_id.encode()).hexdigest()
+    local_namespace = f"{namespace}::{token}"
+    entry = {uid: quoted_symbol(local_namespace, "entry", uid) for uid in state}
+    exit_ = {uid: quoted_symbol(local_namespace, "exit", uid) for uid in state}
+    declarations = tuple(sorted(
+        ((entry[uid], _storage_sort(storage)) for uid, storage in state.items()),
+        key=lambda item: item[0],
+    )) + tuple(sorted(
+        ((exit_[uid], _storage_sort(storage)) for uid, storage in state.items()),
+        key=lambda item: item[0],
+    ))
+    return ScalarEventEncoding(
+        node_id=node_id,
+        operation=operation,
+        namespace=local_namespace,
+        sort_declarations=_sort_declarations(slice_),
+        declarations=declarations,
+        updates=(),
+        frames=tuple(
+            f"(= {exit_[uid]} {entry[uid]})" for uid in sorted(state)
+        ),
+        branch_condition=None,
+        precondition=None,
+        exception_condition=SMTTerm("false", NativeSort.BOOL),
     )
