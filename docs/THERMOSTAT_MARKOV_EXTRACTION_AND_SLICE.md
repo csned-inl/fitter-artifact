@@ -96,3 +96,30 @@ slice. It does not yet establish:
 
 Those are later proof gates. Any failure or unknown result there remains a
 non-certificate.
+
+## Phase 4 prerequisite manifest
+
+Before constructing SMT expressions, `markov_obligations.py` fixes the complete
+query surface for each candidate `(b_obs, b_act)`. It generates every exact
+reset-prefix case and the steady-state history-window case. Each case contains:
+
+- one disagreement obligation for every theorem-visible term;
+- separate no-outcome, multiple-first-outcome, and unsupported-representation
+  obligations;
+- an explicit structural replay obligation for the exact buffer shift.
+
+Float32 and Float64 visible terms require IEEE bit equality. Outcome equality is
+constructor-sensitive. Boolean, integer, enum, and action-mask terms use native
+typed equality. Query acceptance requires `UNSAT`; `SAT`, `UNKNOWN`, timeout,
+errors, missing query hashes, or missing solver identities can never make a
+manifest certificate-ready.
+
+For the illustrative candidate `(b_obs=2, b_act=1)`, the manifest has three
+history cases, 57 required solver queries, and three buffer-shift replay
+obligations. `markov_metrics.py` reports pre-SMT state, event, control-selector,
+sort, and query counts and applies explicit fail-closed budgets.
+
+The manifest remains deliberately non-ready: exact numeric operator lowering,
+shield/reward/outcome equations, reachability inclusion, buffer-history replay,
+and every solver query are still unrun. Z3 is pinned by the repository but is
+not installed in the current execution environment.
