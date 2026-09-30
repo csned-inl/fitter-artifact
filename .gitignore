@@ -3,6 +3,8 @@ results/
 build/
 *.egg-info/
 .venv/
+/.venv-finite-history/
+/runs/
 __pycache__/
 *.pyc
 ._*
