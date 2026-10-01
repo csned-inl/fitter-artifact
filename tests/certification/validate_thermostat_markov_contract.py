@@ -37,6 +37,15 @@ class ThermostatContractValidation(unittest.TestCase):
         errors = validate_thermostat_controller_step_contract(contract)
         self.assertTrue(any("action history convention" in error for error in errors), errors)
 
+    def test_buffer_reset_or_shift_rule_mutation_rejects(self):
+        for key in ("reset_rule", "step_rule"):
+            contract = load_controller_step_contract()
+            contract["buffer"][key] = "mutated"
+            errors = validate_thermostat_controller_step_contract(contract)
+            self.assertTrue(any(
+                f"buffer {key.split('_')[0]} rule" in error for error in errors
+            ), errors)
+
     def test_event_order_mutation_rejects(self):
         contract = load_controller_step_contract()
         contract["event_order"]["step_programs"][0:2] = reversed(

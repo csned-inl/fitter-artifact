@@ -104,6 +104,12 @@ def _validate_contract_shape(contract: Mapping[str, Any]) -> list[str]:
     _check(errors, "observation padding", buffer.get("observation_padding"), "float32_zero")
     _check(errors, "action padding", buffer.get("action_padding"), "float32_zero_vector")
     _check(errors, "action width", buffer.get("action_width"), 4)
+    _check(errors, "buffer reset rule", buffer.get("reset_rule"),
+           "return current observation followed by zero histories, then retain that "
+           "current observation as the first prior observation")
+    _check(errors, "buffer step rule", buffer.get("step_rule"),
+           "push executed action, form next buffer from next observation and retained "
+           "histories, then retain next observation")
 
     outcomes = contract.get("outcomes", {})
     _check(errors, "outcome constructors", outcomes.get("constructors"),
@@ -322,6 +328,60 @@ def validate_thermostat_controller_step_contract(
         )
         if not np.array_equal(actual_layout, expected_layout):
             errors.append("buffer layout differs from current/newest-first/executed-one-hot contract")
+
+        _check(errors, "runtime buffer dimensions", buffered.buffer_spec, {
+            "n_obs": 2,
+            "n_act": 2,
+            "base_obs_dim": 2,
+            "augmented_obs_dim": 14,
+            "n_actions": 4,
+        })
+        expected_one_hot = np.eye(4, dtype=np.float32)
+        for action in range(4):
+            actual = buffered._onehot(action)
+            if actual.dtype != np.float32 \
+                    or not np.array_equal(actual, expected_one_hot[action]):
+                errors.append(
+                    f"buffer action {action} is not exact Float32 one-hot"
+                )
+
+        buffered._obs_hist = [
+            np.array([3.0, 4.0], dtype=np.float32),
+            np.array([5.0, 6.0], dtype=np.float32),
+        ]
+        buffered._push_obs(np.array([7.0, 8.0], dtype=np.float32))
+        expected_observations = (
+            np.array([7.0, 8.0], dtype=np.float32),
+            np.array([3.0, 4.0], dtype=np.float32),
+        )
+        if len(buffered._obs_hist) != 2 or any(
+            not np.array_equal(actual, expected)
+            for actual, expected in zip(buffered._obs_hist, expected_observations)
+        ):
+            errors.append("buffer observation shift is not newest-first and truncated")
+
+        buffered._act_hist = [buffered._onehot(2), buffered._onehot(1)]
+        buffered._push_act(0)
+        expected_actions = (buffered._onehot(0), buffered._onehot(2))
+        if len(buffered._act_hist) != 2 or any(
+            not np.array_equal(actual, expected)
+            for actual, expected in zip(buffered._act_hist, expected_actions)
+        ):
+            errors.append("buffer action shift is not newest-first and truncated")
+
+        buffered._obs_hist = [
+            np.zeros(2, dtype=np.float32) for _ in range(2)
+        ]
+        buffered._act_hist = [
+            np.zeros(4, dtype=np.float32) for _ in range(2)
+        ]
+        reset_layout = buffered._augment(
+            np.array([1.0, 2.0], dtype=np.float32)
+        )
+        padding_bits = reset_layout[2:].view(np.uint32)
+        if reset_layout.dtype != np.float32 \
+                or not np.all(padding_bits == np.uint32(0)):
+            errors.append("buffer reset padding is not exact positive Float32 zero")
     finally:
         buffered.close()
         env.close()

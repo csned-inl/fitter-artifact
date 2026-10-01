@@ -10,6 +10,9 @@ from .markov_obligations import ObligationManifest
 from .markov_slice import TheoremSlice
 
 
+THERMOSTAT_ACTION_HISTORY_WIDTH = 4
+
+
 @dataclass(frozen=True)
 class FormulaBudget:
     max_solver_queries: int = 512
@@ -48,7 +51,12 @@ def formula_metrics(
     observation_width = sum(
         term.name.startswith("next_observation.") for term in slice_.visible_terms
     )
-    shared_slots = observation_width * (manifest.b_obs + 1) + manifest.b_act
+    # Runtime action history is a four-scalar Float32 one-hot vector. Count
+    # actual solver terms instead of treating that vector as one logical slot.
+    shared_slots = (
+        observation_width * (manifest.b_obs + 1)
+        + THERMOSTAT_ACTION_HISTORY_WIDTH * manifest.b_act
+    )
     transition_copies = length + 1  # history window plus the current transition
     per_run = len(slice_.storages)
     state_terms = 2 * per_run * transition_copies + shared_slots

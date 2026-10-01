@@ -61,6 +61,8 @@ fails closed.
 
 This is the standing redundancy policy in concrete form: share pure exact
 terms and avoid repeated transport, but do not delete semantic behaviors. The
-production `ObligationManifest` boundary remains closed until buffer-history,
-paired-run, reachability/invariant, progress, and exhaustive difference
-relations are implemented and checked.
+separately documented sparse finite-buffer view now checks the exact layout,
+reset padding, and one-step shift without copying this transition. The
+production `ObligationManifest` boundary remains closed until complete finite
+predecessor chains, paired-run, reachability/invariant, progress, and
+exhaustive difference relations are implemented and checked.

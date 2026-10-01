@@ -28,6 +28,7 @@ TESTS=(
   tests/certification/validate_markov_z3_events.py
   tests/certification/validate_markov_z3_transition.py
   tests/certification/validate_markov_z3_interface.py
+  tests/certification/validate_markov_z3_history.py
   tests/certification/validate_markov_z3_backend.py
   tests/certification/validate_gate_reporting.py
 )
