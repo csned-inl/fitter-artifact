@@ -325,11 +325,26 @@ def compile_scalar_event(
         expected = {
             "graph:system::environment::acPort::heat::rateWatts": "semantic:ac_output",
             "graph:system::environment::heaterPort::heat::rateWatts": "semantic:heater_output",
-            "graph:system::lastObservedTemperature": "semantic:held_temperature",
             "graph:system::thermometer::environmentPort::reading::temperatureCelcius":
                 "semantic:physical_temperature",
         }
-        if writes != set(expected) or data.get("constraints") != []:
+        live_bindings = [
+            binding for binding in data.get("bindings", [])
+            if binding.get("target") == "system::lastObservedTemperature"
+        ]
+        expected_live_expression = {
+            "kind": "reference",
+            "storage": "system::thermometer::lastReadingCelcius",
+        }
+        live_expression = (
+            live_bindings[0].get("expression", {})
+            if len(live_bindings) == 1 else {}
+        )
+        if writes != set(expected) or data.get("constraints") != [] \
+                or not all(
+                    live_expression.get(key) == value
+                    for key, value in expected_live_expression.items()
+                ):
             raise UnsupportedLoweringError("source-constraint projection mismatch")
         updates.extend(
             f"(= {exit_[target]} {entry[source_uid]})"

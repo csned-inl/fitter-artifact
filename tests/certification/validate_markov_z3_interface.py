@@ -63,7 +63,7 @@ class ThermostatInterfaceTests(unittest.TestCase):
 
     def test_interface_adds_definitions_but_no_duplicate_state(self):
         self.assertEqual(self.encoding.declarations, self.transition.declarations)
-        self.assertEqual(len(self.encoding.declarations), 638)
+        self.assertEqual(len(self.encoding.declarations), 635)
         self.assertEqual(len(self.encoding.declarations),
                          len(set(self.encoding.declarations)))
         self.assertEqual(len(self.encoding.definitions), 25)

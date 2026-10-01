@@ -38,6 +38,7 @@ class ThermostatRelevanceSliceTests(unittest.TestCase):
         self.assertEqual(metrics["ir_storages"], 136)
         self.assertEqual(metrics["interval_control_states"], 132)
         self.assertEqual(metrics["interval_source_nodes"], 78)
+        self.assertEqual(metrics["retained_storages"], 46)
         self.assertEqual(metrics["forbidden_sorts"], 0)
         self.assertLess(metrics["retained_storages"], metrics["ir_storages"])
         self.assertLess(metrics["retained_events"], metrics["interval_source_nodes"])
@@ -48,6 +49,41 @@ class ThermostatRelevanceSliceTests(unittest.TestCase):
         self.assertIn("semantic:held_temperature", retained)
         self.assertIn("semantic:sent_temperature_payload", retained)
         self.assertIn("semantic:received_temperature_payload", retained)
+
+    def test_live_observation_binding_is_projected_not_carried(self):
+        retained = {item.identity.uid for item in self.slice.storages}
+        self.assertNotIn("graph:system::lastObservedTemperature", retained)
+        matching = [
+            record for record in self.slice.reductions
+            if record.source_terms == (
+                "graph:system::lastObservedTemperature",
+            )
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0].rule, "exact_storage_projection")
+        self.assertEqual(
+            matching[0].result_terms, ("semantic:held_temperature",)
+        )
+
+    def test_live_observation_binding_mutation_fails_closed(self):
+        events = list(self.ir.events)
+        index = next(
+            index for index, event in enumerate(events)
+            if event.node_id == "cycle/solve"
+        )
+        events[index] = replace(
+            events[index],
+            data_json=events[index].data_json.replace(
+                "system::thermometer::lastReadingCelcius",
+                "system::environment::temperatureCelcius",
+            ),
+        )
+        with self.assertRaisesRegex(
+            ValueError, "live-observation binding mismatch"
+        ):
+            build_thermostat_relevance_slice(
+                replace(self.ir, events=tuple(events)), self.interval,
+            )
 
     def test_no_generic_runtime_sort_survives(self):
         self.assertFalse(any(item.identity.native_sort in {

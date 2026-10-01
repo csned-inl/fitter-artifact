@@ -45,7 +45,7 @@ availability conditions; next observations are available only on `Continue`.
 ## Anti-redundancy structure
 
 The interface is a view over the existing sparse transition. It adds no
-`declare-const` state cells and retains the transition's 638 declarations.
+`declare-const` state cells and retains the transition's 635 declarations.
 Identical exit values are grouped by their already checked control selectors,
 and each selected storage is defined at most once. Shared nullary `define-fun`
 terms name pure selections, shield predicates, outcome priority, reward,

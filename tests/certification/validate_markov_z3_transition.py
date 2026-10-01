@@ -42,20 +42,20 @@ class TransitionRelationTests(unittest.TestCase):
     def test_complete_composition_metrics(self):
         self.assertEqual(self.encoding.control_state_count, 132)
         self.assertEqual(self.encoding.control_edge_count, 281)
-        self.assertEqual(self.encoding.state_term_count, 47)
-        self.assertEqual(len(self.encoding.declarations), 638)
+        self.assertEqual(self.encoding.state_term_count, 46)
+        self.assertEqual(len(self.encoding.declarations), 635)
         self.assertEqual(sum("::boundary-entry::" in value
-                             for value in self.encoding.declarations), 47)
+                             for value in self.encoding.declarations), 46)
         self.assertEqual(sum("::state-write::" in value
-                             for value in self.encoding.declarations), 72)
+                             for value in self.encoding.declarations), 71)
         self.assertEqual(sum("::state-phi::" in value
-                             for value in self.encoding.declarations), 106)
+                             for value in self.encoding.declarations), 105)
         self.assertEqual(len(self.encoding.edge_assertions), 281)
-        self.assertEqual(len(self.encoding.bridge_assertions), 264)
+        self.assertEqual(len(self.encoding.bridge_assertions), 262)
         self.assertLess(len(self.encoding.smt2().encode()), 1_100_000)
 
     def test_every_event_update_is_control_guarded(self):
-        self.assertEqual(len(self.encoding.event_assertions), 72)
+        self.assertEqual(len(self.encoding.event_assertions), 71)
         self.assertTrue(all(formula.startswith("(=> ")
                             for formula in self.encoding.event_assertions))
 
@@ -65,7 +65,7 @@ class TransitionRelationTests(unittest.TestCase):
             {storage.identity.uid for storage in self.slice.storages},
         )
         self.assertEqual(len(self.encoding.exit_state_terms), 9)
-        self.assertTrue(all(len(terms) == 47
+        self.assertTrue(all(len(terms) == 46
                             for _, terms in self.encoding.exit_state_terms))
         self.assertNotIn("::instance::", self.encoding.smt2())
 

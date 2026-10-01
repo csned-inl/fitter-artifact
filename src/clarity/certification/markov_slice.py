@@ -175,8 +175,34 @@ def _projection(ir: MarkovIR):
             "semantic:sent_temperature_payload", "semantic:thermometer_payload_present",
         ),
     }
+    solve_events = [
+        event for event in ir.events
+        if event.node_id == "cycle/solve" and event.operation == "solve_source_constraints"
+    ]
+    solve_data = solve_events[0].decoded_data() if len(solve_events) == 1 else {}
+    observed_bindings = [
+        binding for binding in solve_data.get("bindings", [])
+        if binding.get("target") == "system::lastObservedTemperature"
+    ]
+    observed_expression = (
+        observed_bindings[0].get("expression", {})
+        if len(observed_bindings) == 1 else {}
+    )
+    if solve_data.get("algorithm", {}).get("bindings") \
+            != "install live expressions; do not snapshot them" \
+            or observed_expression.get("kind") != "reference" \
+            or observed_expression.get("storage") \
+            != "system::thermometer::lastReadingCelcius":
+        raise ValueError("thermostat live-observation binding mismatch")
+    live_bindings = {
+        # ``=`` on this SysML attribute installs a live expression.  It is
+        # resolved on every read and is not a separately carried state cell.
+        "system::lastObservedTemperature": ("semantic:held_temperature",),
+    }
 
-    def map_key(key: str) -> tuple[str, ...]:
+    def map_read_key(key: str) -> tuple[str, ...]:
+        if key in live_bindings:
+            return live_bindings[key]
         if key in special:
             return special[key]
         if key in semantic_by_key:
@@ -185,10 +211,24 @@ def _projection(ir: MarkovIR):
             return (direct_source[key],)
         return ()
 
-    return storage, semantic_by_key, direct_source, special, map_key
+    def map_write_key(key: str) -> tuple[str, ...]:
+        if key in live_bindings:
+            # Installing the binding changes lookup semantics, not its source.
+            return ()
+        return map_read_key(key)
+
+    return (
+        storage, semantic_by_key, direct_source, special, live_bindings,
+        map_read_key, map_write_key,
+    )
 
 
-def _event_dependencies(ir: MarkovIR, interval: FiniteDecisionInterval, map_key):
+def _event_dependencies(
+    ir: MarkovIR,
+    interval: FiniteDecisionInterval,
+    map_read_key,
+    map_write_key,
+):
     events = {event.node_id: event for event in ir.events}
     interval_nodes = {state.node_id for state in interval.states}
     result = {}
@@ -207,8 +247,8 @@ def _event_dependencies(ir: MarkovIR, interval: FiniteDecisionInterval, map_key)
             or access.storage_uid.removeprefix("graph:").startswith("system::")
             or access.storage_uid == "graph:dt"
         }
-        reads = {uid for key in exact_reads for uid in map_key(key)}
-        writes = {uid for key in exact_writes for uid in map_key(key)}
+        reads = {uid for key in exact_reads for uid in map_read_key(key)}
+        writes = {uid for key in exact_writes for uid in map_write_key(key)}
         reads.update(access.storage_uid for access in event.semantic_reads)
         writes.update(access.storage_uid for access in event.semantic_writes)
         if event.operation == "check_all_requirements":
@@ -246,14 +286,22 @@ def build_thermostat_relevance_slice(
     ir: MarkovIR,
     interval: FiniteDecisionInterval,
 ) -> TheoremSlice:
-    storage, semantic_by_key, direct_source, special, map_key = _projection(ir)
+    (
+        storage, semantic_by_key, direct_source, special, live_bindings,
+        map_read_key, map_write_key,
+    ) = _projection(ir)
     synthetic = _interface_storages(ir)
     all_storage = dict(storage)
     all_storage.update((item.identity.uid, item) for item in synthetic)
-    events, interval_nodes, dependencies = _event_dependencies(ir, interval, map_key)
+    events, interval_nodes, dependencies = _event_dependencies(
+        ir, interval, map_read_key, map_write_key,
+    )
 
     request = events[ir.decision_boundary.request_node]
-    seeds = {uid for key in _refs(request.decoded_data()) for uid in map_key(key)}
+    seeds = {
+        uid for key in _refs(request.decoded_data())
+        for uid in map_read_key(key)
+    }
     seeds.update({
         "slice:configured_dt", "slice:policy_proposal", "slice:executed_action",
         "slice:shield:setPoint", "slice:shield:temperatureCelcius", "slice:shield:done",
@@ -306,7 +354,9 @@ def build_thermostat_relevance_slice(
         uid = item.identity.uid
         if uid in retained_uids:
             continue
-        targets = tuple(sorted({mapped for key in item.graph_keys for mapped in map_key(key)}
+        targets = tuple(sorted({
+            mapped for key in item.graph_keys for mapped in map_read_key(key)
+        }
                                .intersection(retained_uids)))
         if item.identity.layer is StorageLayer.SEMANTIC:
             rule = "dead_semantic_storage"
@@ -378,13 +428,20 @@ def validate_thermostat_relevance_slice(
         errors.append("slice interval identity mismatch")
 
     # Reconstruct the fixed point without invoking the slice builder.
-    source_storage, _, _, _, map_key = _projection(ir)
+    (
+        source_storage, _, _, _, live_bindings, map_read_key, map_write_key,
+    ) = _projection(ir)
     interface = _interface_storages(ir)
     universe = dict(source_storage)
     universe.update((item.identity.uid, item) for item in interface)
-    source_events, interval_nodes, dependency = _event_dependencies(ir, interval, map_key)
+    source_events, interval_nodes, dependency = _event_dependencies(
+        ir, interval, map_read_key, map_write_key,
+    )
     request = source_events[ir.decision_boundary.request_node]
-    seed = {uid for key in _refs(request.decoded_data()) for uid in map_key(key)}
+    seed = {
+        uid for key in _refs(request.decoded_data())
+        for uid in map_read_key(key)
+    }
     seed.update({
         "slice:configured_dt", "slice:policy_proposal", "slice:executed_action",
         "slice:shield:setPoint", "slice:shield:temperatureCelcius", "slice:shield:done",
@@ -458,7 +515,9 @@ def validate_thermostat_relevance_slice(
             )
         elif source in source_storage:
             item = source_storage[source]
-            mapped = tuple(sorted({target for key in item.graph_keys for target in map_key(key)}
+            mapped = tuple(sorted({
+                target for key in item.graph_keys for target in map_read_key(key)
+            }
                                   & retained_uids))
             valid = (
                 source not in retained_uids

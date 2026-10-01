@@ -58,7 +58,7 @@ anchor has not yet been encoded.
 ## Anti-redundancy boundary
 
 The buffer component references the existing sparse controller-visible
-interface. It does not clone any of the 638 transition declarations or any
+interface. It does not clone any of the 635 transition declarations or any
 transition assertion. In the checked configuration it adds:
 
 - 8 independent current-history scalars;

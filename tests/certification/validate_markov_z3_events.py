@@ -98,13 +98,30 @@ class ScalarEventTests(unittest.TestCase):
         with self.assertRaises(UnsupportedLoweringError):
             enum_sort_declarations(("UnspecifiedRuntimeEnum",))
 
-    def test_constraint_solve_is_four_exact_copies(self):
+    def test_constraint_solve_copies_flows_but_not_live_bindings(self):
         encoding = self.encoding("cycle/solve")
-        self.assertEqual(len(encoding.updates), 4)
+        self.assertEqual(len(encoding.updates), 3)
         joined = "\n".join(encoding.updates)
-        for source in ("semantic:ac_output", "semantic:heater_output",
-                       "semantic:held_temperature", "semantic:physical_temperature"):
+        for source in (
+            "semantic:ac_output", "semantic:heater_output",
+            "semantic:physical_temperature",
+        ):
             self.assertIn(source, joined)
+        self.assertNotIn("graph:system::lastObservedTemperature", joined)
+
+    def test_constraint_solve_live_binding_mutation_fails_closed(self):
+        source = self.source["cycle/solve"]
+        mutated = replace(
+            source,
+            data_json=source.data_json.replace(
+                "system::thermometer::lastReadingCelcius",
+                "system::environment::temperatureCelcius",
+            ),
+        )
+        with self.assertRaises(UnsupportedLoweringError):
+            compile_scalar_event(
+                self.slice, mutated, self.sliced["cycle/solve"],
+            )
 
     def test_thermometer_send_and_accept_are_distinct_copies(self):
         send = self.encoding("system::thermometer/step/4")

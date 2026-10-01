@@ -141,7 +141,7 @@ class BufferHistoryTests(unittest.TestCase):
         self.assertNotIn("outcome_error", definition)
 
     def test_history_adds_no_transition_copy(self):
-        self.assertEqual(self.encoding.transition_declaration_count, 638)
+        self.assertEqual(self.encoding.transition_declaration_count, 635)
         self.assertEqual(len(self.encoding.declarations), 8)
         self.assertEqual(len(self.encoding.definitions), 13)
         self.assertEqual(len(set(self.encoding.declarations)), 8)

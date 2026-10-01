@@ -305,14 +305,14 @@ class HistoryWindowTests(unittest.TestCase):
         for name, window in self.windows.items():
             step_count = len(window.steps)
             with self.subTest(case=name):
-                self.assertEqual(len(window.declarations), 646 + 638 * step_count)
+                self.assertEqual(len(window.declarations), 643 + 635 * step_count)
                 self.assertEqual(len(window.definitions), 38 + 25 * step_count)
-                self.assertEqual(len(window.state_bridges), 36 * step_count)
+                self.assertEqual(len(window.state_bridges), 35 * step_count)
                 self.assertEqual(len(set(window.declarations)),
                                  len(window.declarations))
                 self.assertTrue(all(
-                    step.transition.state_term_count == 47
-                    and len(step.transition.declarations) == 638
+                    step.transition.state_term_count == 46
+                    and len(step.transition.declarations) == 635
                     for step in window.steps
                 ))
 
@@ -336,7 +336,7 @@ class HistoryWindowTests(unittest.TestCase):
         for window in self.windows.values():
             carried = set(window.carried_state_uids)
             reinitialized = set(window.reinitialized_uids)
-            self.assertEqual(len(carried), 36)
+            self.assertEqual(len(carried), 35)
             self.assertEqual(len(reinitialized), 11)
             self.assertFalse(carried.intersection(reinitialized))
             for index, step in enumerate(window.steps):
@@ -346,7 +346,7 @@ class HistoryWindowTests(unittest.TestCase):
                 )
                 target_symbols = dict(target.boundary_entry_terms)
                 matching = window.state_bridges[
-                    index * 36:(index + 1) * 36
+                    index * 35:(index + 1) * 35
                 ]
                 self.assertEqual(len(matching), len(carried))
                 self.assertTrue(all(
@@ -469,7 +469,7 @@ class HistoryWindowTests(unittest.TestCase):
                 witness = _reset_trace_witness_assertions(
                     window, self.slice, self.transition,
                 )
-                self.assertEqual(len(witness), 47 * window.transition_copy_count)
+                self.assertEqual(len(witness), 46 * window.transition_copy_count)
 
     def test_unsat_diagnostic_labels_every_base_and_witness_assertion(self):
         window = self.windows["reset_prefix_1"]

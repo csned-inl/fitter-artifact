@@ -14,7 +14,7 @@ exactly `t` transitions. Each historical transition:
 - uses one checked sparse transition relation;
 - is constrained to reach the unique next-decision exit;
 - must have a continuing controller outcome;
-- bridges all 36 persistent typed state cells to the next boundary;
+- bridges all 35 persistent typed state cells to the next boundary;
 - freshly initializes the 11 per-decision proposal, executed-action,
   shield-input, and property-accumulator cells; and
 - exposes its boundary observation and shield-selected executed action for
@@ -25,12 +25,18 @@ For `b_obs=2, b_act=1`:
 | Case | Historical transitions | Total transition copies including current | State bridges | Buffer correspondences |
 |---|---:|---:|---:|---:|
 | `reset_prefix_0` | 0 | 1 | 0 | 0 |
-| `reset_prefix_1` | 1 | 2 | 36 | 6 |
-| `steady_state` | 2 | 3 | 72 | 8 |
+| `reset_prefix_1` | 1 | 2 | 35 | 6 |
+| `steady_state` | 2 | 3 | 70 | 8 |
 
 The case formula is constructed once and is reusable for every later
 visible-difference predicate. No transition is copied per predicate and no
 control-flow path is enumerated.
+
+`lastObservedTemperature` is absent from these bridges because the source
+declares it as a live binding to `thermometer.lastReadingCelcius`. Carrying it
+as a separate snapshot would both duplicate the held-temperature cell and use
+the wrong semantics after the thermometer updates. The checked slice records
+an exact projection to `semantic:held_temperature` instead.
 
 ## Direct lag projection
 
@@ -81,7 +87,7 @@ normalization, declaration loss, incomplete state bridges, and namespace
 aliasing.
 
 The non-vacuity check supplies Z3 with one concrete, continuing reset trace
-from the source simulator. It fixes all 47 typed boundary cells at every
+from the source simulator. It fixes all 46 typed boundary cells at every
 decision in the finite window, so Z3 verifies the encoded transitions instead
 of searching for an arbitrary floating-point trajectory. Source Boolean
 policy-call outputs are uninitialized only at reset and overwritten before
