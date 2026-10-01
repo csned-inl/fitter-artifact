@@ -19,6 +19,7 @@ from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import SOLVER_PIPELINE, UnsupportedLoweringError
 from clarity.certification.markov_z3_pair import (
     _validate_alpha_copies,
+    compile_executed_action_overapproximation,
     compile_thermostat_paired_query,
 )
 
@@ -49,6 +50,22 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                 self.assertEqual(joined.count("fp.to_ieee_bv"), 20)
                 self.assertIn("slice:policy_proposal", joined)
                 self.assertNotIn("semantic:physical_temperature", joined)
+
+    def test_fixed_mdp_parameters_are_shared_separately(self):
+        expected = {
+            "semantic:outside_temperature",
+            "semantic:set_point",
+            "semantic:tolerance",
+            "slice:configured_dt",
+        }
+        for case, query in self.queries.items():
+            with self.subTest(case=case):
+                self.assertEqual(len(query.fixed_parameter_equalities), 4)
+                joined = "\n".join(query.fixed_parameter_equalities)
+                self.assertEqual(joined.count("fp.to_ieee_bv"), 8)
+                for uid in expected:
+                    self.assertIn(uid, joined)
+                self.assertNotIn("slice:policy_proposal", joined)
 
     def test_one_aggregate_root_covers_every_visible_result(self):
         expected = {
@@ -92,7 +109,8 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                 self.assertEqual(
                     smt2.count("(assert "),
                     len(query.left.assertions) + len(query.right.assertions)
-                    + len(query.current_equalities) + 1,
+                    + len(query.current_equalities)
+                    + len(query.fixed_parameter_equalities) + 1,
                 )
 
     def test_paired_bases_are_exact_namespace_renamed_copies(self):
@@ -151,28 +169,78 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                     f"(assert {query.counterexample_assertion})", incremental,
                 )
 
+    def test_executed_action_query_is_a_strict_source_premise_subset(self):
+        for case, query in self.queries.items():
+            with self.subTest(case=case):
+                target = compile_executed_action_overapproximation(query)
+                full = set(
+                    query.left.assertions + query.right.assertions
+                    + query.current_equalities
+                    + query.fixed_parameter_equalities
+                )
+                self.assertEqual(target.name, "executed_action")
+                self.assertTrue(set(target.premise_assertions).issubset(full))
+                self.assertTrue(set(target.declarations).issubset(
+                    query.left.declarations + query.right.declarations
+                ))
+                self.assertTrue(set(target.definitions).issubset(
+                    query.left.definitions + query.right.definitions
+                ))
+                self.assertEqual(target.source_assertion_count, len(full))
+                self.assertEqual(
+                    target.difference_assertion,
+                    next(item.assertion for item in query.differences
+                         if item.name == "executed_action"),
+                )
+                self.assertGreater(target.omitted_assertion_count, 0)
+                self.assertLess(len(target.smt2().encode()), 20_000)
+                self.assertNotIn("::flow::control-state::", target.smt2())
+                self.assertNotIn("guarded", target.smt2())
+
+    def test_executed_action_query_fails_closed_without_shared_tolerance(self):
+        query = self.queries["steady_state"]
+        mutated = replace(
+            query,
+            fixed_parameter_equalities=tuple(
+                item for item in query.fixed_parameter_equalities
+                if "semantic:tolerance" not in item
+            ),
+        )
+        with self.assertRaises(UnsupportedLoweringError):
+            compile_executed_action_overapproximation(mutated)
+
+    def test_executed_action_query_rejects_a_weakened_difference(self):
+        query = self.queries["steady_state"]
+        differences = tuple(
+            replace(item, assertion="false")
+            if item.name == "executed_action" else item
+            for item in query.differences
+        )
+        with self.assertRaises(UnsupportedLoweringError):
+            compile_executed_action_overapproximation(
+                replace(query, differences=differences)
+            )
+
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
-    def test_z3_finds_no_paired_markov_counterexample(self):
+    def test_z3_proves_executed_action_target(self):
         import z3
 
         for case, query in self.queries.items():
             with self.subTest(case=case):
-                expressions = z3.parse_smt2_string(query.incremental_smt2())
+                target = compile_executed_action_overapproximation(query)
+                expressions = z3.parse_smt2_string(target.smt2())
                 solver = z3.Then(*(
                     z3.Tactic(name) for name in SOLVER_PIPELINE
                 )).solver()
-                solver.set(timeout=30_000)
+                solver.set(timeout=5_000)
                 solver.add(*list(expressions))
-                for selector, difference in zip(
-                    query.difference_selectors, query.differences,
-                ):
-                    answer = solver.check(z3.Bool(selector))
-                    self.assertEqual(
-                        answer, z3.unsat,
-                        f"{case}/{difference.name}: expected unsat, found "
-                        f"{answer}; reason={solver.reason_unknown()}; "
-                        f"model_retained={answer == z3.sat}",
-                    )
+                answer = solver.check()
+                self.assertEqual(
+                    answer, z3.unsat,
+                    f"{case}/executed_action: sound over-approximation was "
+                    f"{answer}, not a proof; reason={solver.reason_unknown()}; "
+                    f"candidate_retained={answer == z3.sat}",
+                )
 
 
 if __name__ == "__main__":

@@ -2,8 +2,9 @@
 
 This is deliberately a prototype endpoint, not a generic obligation compiler.
 It places two independent copies of one checked thermostat history window in
-the same SMT query, equates their controller-visible current buffers and policy
-proposals, and asks whether any next controller-visible result can differ.
+the same SMT query, shares the fixed MDP parameters, equates their
+controller-visible current buffers and policy proposals, and asks whether any
+next controller-visible result can differ.
 
 An ``UNSAT`` result rules out that counterexample for the selected history
 case.  ``SAT``, ``UNKNOWN``, timeout, and solver errors are never proofs.
@@ -12,6 +13,7 @@ case.  ``SAT``, ``UNKNOWN``, timeout, and solver errors are never proofs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .markov_interval import FiniteDecisionInterval
 from .markov_ir import MarkovIR, NativeSort
@@ -113,10 +115,58 @@ def _validate_alpha_copies(
         )
 
 
+_QUOTED_SYMBOL = re.compile(r"\|[^|]+\|")
+_DEFINE_HEAD = re.compile(r"^\(define-fun (\|[^|]+\|) \(\)")
+_DECLARE_HEAD = re.compile(r"^\(declare-const (\|[^|]+\|) ")
+
+
+def _symbols(text: str) -> set[str]:
+    return set(_QUOTED_SYMBOL.findall(text))
+
+
+def _head(pattern: re.Pattern[str], text: str, kind: str) -> str:
+    match = pattern.match(text)
+    if match is None:
+        raise UnsupportedLoweringError(f"cannot parse paired-query {kind}")
+    return match.group(1)
+
+
 @dataclass(frozen=True)
 class PairedDifferenceEncoding:
     name: str
     assertion: str
+
+
+@dataclass(frozen=True)
+class TargetOverapproximationEncoding:
+    """A premise-dropping target query whose UNSAT result is sound.
+
+    Every retained premise is an exact member of the full paired base.  The
+    omitted premises can only enlarge the model set, so SAT is only a candidate
+    and UNKNOWN is inconclusive, while UNSAT proves the corresponding full
+    paired obligation.
+    """
+
+    name: str
+    sort_declarations: tuple[str, ...]
+    declarations: tuple[str, ...]
+    definitions: tuple[str, ...]
+    premise_assertions: tuple[str, ...]
+    difference_assertion: str
+    source_assertion_count: int
+
+    @property
+    def omitted_assertion_count(self) -> int:
+        return self.source_assertion_count - len(self.premise_assertions)
+
+    def smt2(self) -> str:
+        return "\n".join((
+            *self.sort_declarations,
+            *self.declarations,
+            *self.definitions,
+            *(f"(assert {formula})" for formula in self.premise_assertions),
+            f"(assert {self.difference_assertion})",
+        )) + "\n"
 
 
 @dataclass(frozen=True)
@@ -128,6 +178,7 @@ class ThermostatPairedQueryEncoding:
     left: HistoryWindowEncoding
     right: HistoryWindowEncoding
     current_equalities: tuple[str, ...]
+    fixed_parameter_equalities: tuple[str, ...]
     differences: tuple[PairedDifferenceEncoding, ...]
     structural_discharges: tuple[str, ...]
     counterexample_assertion: str
@@ -170,6 +221,7 @@ class ThermostatPairedQueryEncoding:
                 *self.left.assertions,
                 *self.right.assertions,
                 *self.current_equalities,
+                *self.fixed_parameter_equalities,
                 *extra_assertions,
             )),
         )) + "\n"
@@ -182,9 +234,11 @@ class ThermostatPairedQueryEncoding:
     def incremental_smt2(self) -> str:
         """Guard each difference with an assumption selector.
 
-        A solver can parse and assert this base once, first check that it is
-        satisfiable, then call ``check(selector)`` for every selector.  This is
-        exactly a decomposition of the aggregate disjunction, not a weakening.
+        A solver can parse and assert this base once, then call
+        ``check(selector)`` for every selector.  Paired-base nonvacuity follows
+        compositionally from the checked single-window witnesses and exact
+        alpha copies.  This is exactly a decomposition of the aggregate
+        disjunction, not a weakening.
         """
 
         selectors = self.difference_selectors
@@ -284,6 +338,39 @@ def compile_thermostat_paired_query(
         _equal(left_proposal_text, right_proposal_text, NativeSort.ENUM)
     )
 
+    immutable = tuple(
+        item.identity for item in slice_.storages
+        if item.identity.role == "immutable_parameter"
+    )
+    expected_immutable = {
+        "semantic:outside_temperature",
+        "semantic:set_point",
+        "semantic:tolerance",
+        "slice:configured_dt",
+    }
+    if {item.uid for item in immutable} != expected_immutable \
+            or len(immutable) != len(expected_immutable) \
+            or any(item.native_sort is not NativeSort.FLOAT64 for item in immutable):
+        raise UnsupportedLoweringError(
+            "paired query immutable-parameter inventory mismatch"
+        )
+    fixed_parameter_equalities = []
+    for identity in sorted(immutable, key=lambda item: item.uid):
+        left_text = quoted_symbol(
+            namespace + "::left::transition", "boundary-entry", identity.uid,
+        )
+        right_text = quoted_symbol(
+            namespace + "::right::transition", "boundary-entry", identity.uid,
+        )
+        if not any(left_text in item for item in left.declarations) \
+                or not any(right_text in item for item in right.declarations):
+            raise UnsupportedLoweringError(
+                "paired query cannot resolve immutable-parameter symbols"
+            )
+        fixed_parameter_equalities.append(
+            _equal(left_text, right_text, identity.native_sort)
+        )
+
     left_visible = left.candidate.interface.visible_terms
     right_visible = right.candidate.interface.visible_terms
     if len(left_visible) != len(right_visible):
@@ -352,14 +439,215 @@ def compile_thermostat_paired_query(
         left=left,
         right=right,
         current_equalities=tuple(current_equalities),
+        fixed_parameter_equalities=tuple(fixed_parameter_equalities),
         differences=tuple(differences),
         structural_discharges=structural_discharges,
         counterexample_assertion=counterexample,
     )
 
 
+def compile_executed_action_overapproximation(
+    query: ThermostatPairedQueryEncoding,
+) -> TargetOverapproximationEncoding:
+    """Drop everything outside the exact pre-transition shield/action cone."""
+
+    matches = tuple(
+        item for item in query.differences if item.name == "executed_action"
+    )
+    if len(matches) != 1:
+        raise UnsupportedLoweringError(
+            "executed-action target is missing or duplicated"
+        )
+
+    left_prefix = query.namespace + "::left"
+    right_prefix = query.namespace + "::right"
+    _validate_alpha_copies(
+        query.left,
+        query.right,
+        left_prefix=left_prefix,
+        right_prefix=right_prefix,
+    )
+
+    left_action = query.left.candidate.interface.visible("executed_action")
+    right_action = query.right.candidate.interface.visible("executed_action")
+    expected_actions = (
+        quoted_symbol(left_prefix + "::transition", "boundary-entry",
+                      "slice:executed_action"),
+        quoted_symbol(right_prefix + "::transition", "boundary-entry",
+                      "slice:executed_action"),
+    )
+    if (left_action.text, right_action.text) != expected_actions \
+            or left_action.native_sort is not NativeSort.ENUM \
+            or right_action.native_sort is not NativeSort.ENUM:
+        raise UnsupportedLoweringError(
+            "executed-action target does not use the checked boundary terms"
+        )
+    expected_difference = _different_visible(left_action, right_action)
+    if matches[0].assertion != expected_difference:
+        raise UnsupportedLoweringError(
+            "executed-action difference is not the reconstructed predicate"
+        )
+
+    premises: list[str] = []
+    for side, prefix, action in (
+        (query.left, left_prefix, left_action),
+        (query.right, right_prefix, right_action),
+    ):
+        shield_error = quoted_symbol(
+            prefix + "::interface", "definition", "shield-error",
+        )
+        required_action = quoted_symbol(
+            prefix + "::interface", "definition", "required-action",
+        )
+        if action.availability != f"(not {shield_error})":
+            raise UnsupportedLoweringError(
+                "executed-action availability is not the checked shield guard"
+            )
+        binding = (
+            f"(=> (not {shield_error}) "
+            f"(= {action.text} {required_action}))"
+        )
+        raw_set_point = quoted_symbol(
+            prefix + "::transition", "boundary-entry", "slice:shield:setPoint",
+        )
+        semantic_set_point = quoted_symbol(
+            prefix + "::transition", "boundary-entry", "semantic:set_point",
+        )
+        set_point_bridge = f"(= {raw_set_point} {semantic_set_point})"
+        boundary = side.candidate.interface.boundary_assertions
+        if binding not in boundary or set_point_bridge not in boundary:
+            raise UnsupportedLoweringError(
+                "executed-action cone lacks an exact interface premise"
+            )
+        premises.extend((binding, set_point_bridge))
+
+    slots = query.left.candidate.current_slots
+    if len(slots) < 2 \
+            or tuple(slot.source for slot in slots[:2]) != (
+                "normalized_boundary_observation",
+                "normalized_boundary_observation",
+            ) \
+            or tuple(slot.component for slot in slots[:2]) != (
+                "setPoint", "temperatureCelcius",
+            ):
+        raise UnsupportedLoweringError(
+            "executed-action cone cannot identify current observations"
+        )
+    if len(query.current_equalities) != len(slots) + 1:
+        raise UnsupportedLoweringError(
+            "paired current-equality inventory mismatch"
+        )
+    expected_observation_equalities = tuple(
+        _equal(
+            query.left.candidate.current_slots[index].text,
+            query.right.candidate.current_slots[index].text,
+            NativeSort.FLOAT32,
+        )
+        for index in range(2)
+    )
+    if query.current_equalities[:2] != expected_observation_equalities:
+        raise UnsupportedLoweringError(
+            "executed-action cone has mutated current-observation equalities"
+        )
+    premises.extend(query.current_equalities[:2])
+
+    fixed_by_uid = {
+        uid: _equal(
+            quoted_symbol(left_prefix + "::transition", "boundary-entry", uid),
+            quoted_symbol(right_prefix + "::transition", "boundary-entry", uid),
+            NativeSort.FLOAT64,
+        )
+        for uid in ("semantic:set_point", "semantic:tolerance")
+    }
+    if not set(fixed_by_uid.values()).issubset(query.fixed_parameter_equalities):
+        raise UnsupportedLoweringError(
+            "executed-action cone lacks shared fixed parameters"
+        )
+    premises.extend(fixed_by_uid[uid] for uid in sorted(fixed_by_uid))
+
+    full_assertions = (
+        query.left.assertions + query.right.assertions
+        + query.current_equalities + query.fixed_parameter_equalities
+    )
+    if len(set(premises)) != len(premises) \
+            or not set(premises).issubset(full_assertions):
+        raise UnsupportedLoweringError(
+            "executed-action cone contains a non-source or duplicate premise"
+        )
+
+    all_definitions = query.left.definitions + query.right.definitions
+    definitions_by_symbol: dict[str, str] = {}
+    for definition in all_definitions:
+        symbol = _head(_DEFINE_HEAD, definition, "definition")
+        if symbol in definitions_by_symbol:
+            raise UnsupportedLoweringError(
+                "paired query has duplicate definition symbols"
+            )
+        definitions_by_symbol[symbol] = definition
+
+    needed = _symbols("\n".join((*premises, matches[0].assertion)))
+    selected_symbols: set[str] = set()
+    while True:
+        pending = (needed & set(definitions_by_symbol)) - selected_symbols
+        if not pending:
+            break
+        selected_symbols.update(pending)
+        for symbol in pending:
+            needed.update(_symbols(definitions_by_symbol[symbol]) - {symbol})
+    definitions = tuple(
+        item for item in all_definitions
+        if _head(_DEFINE_HEAD, item, "definition") in selected_symbols
+    )
+
+    all_declarations = query.left.declarations + query.right.declarations
+    declarations_by_symbol: dict[str, str] = {}
+    for declaration in all_declarations:
+        symbol = _head(_DECLARE_HEAD, declaration, "declaration")
+        if symbol in declarations_by_symbol:
+            raise UnsupportedLoweringError(
+                "paired query has duplicate declaration symbols"
+            )
+        declarations_by_symbol[symbol] = declaration
+    declarations = tuple(
+        item for item in all_declarations
+        if _head(_DECLARE_HEAD, item, "declaration") in needed
+    )
+
+    sort_declarations = tuple(dict.fromkeys((
+        *query.left.sort_declarations,
+        *query.right.sort_declarations,
+    )))
+    available = (
+        set(declarations_by_symbol) | set(definitions_by_symbol)
+        | _symbols("\n".join(sort_declarations))
+    )
+    unknown = needed - available
+    if unknown:
+        raise UnsupportedLoweringError(
+            "executed-action cone has unresolved SMT symbols: "
+            + ", ".join(sorted(unknown))
+        )
+
+    encoding = TargetOverapproximationEncoding(
+        name="executed_action",
+        sort_declarations=sort_declarations,
+        declarations=declarations,
+        definitions=definitions,
+        premise_assertions=tuple(premises),
+        difference_assertion=matches[0].assertion,
+        source_assertion_count=len(full_assertions),
+    )
+    if encoding.omitted_assertion_count <= 0:
+        raise UnsupportedLoweringError(
+            "executed-action query did not over-approximate the full base"
+        )
+    return encoding
+
+
 __all__ = [
     "PairedDifferenceEncoding",
+    "TargetOverapproximationEncoding",
     "ThermostatPairedQueryEncoding",
+    "compile_executed_action_overapproximation",
     "compile_thermostat_paired_query",
 ]
