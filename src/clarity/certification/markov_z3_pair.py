@@ -105,12 +105,31 @@ class ThermostatPairedQueryEncoding:
     differences: tuple[PairedDifferenceEncoding, ...]
     counterexample_assertion: str
 
-    def smt2(self) -> str:
+    @property
+    def difference_selectors(self) -> tuple[str, ...]:
+        prefix = "".join(
+            character if character.isalnum() else "_"
+            for character in self.namespace
+        )
+        return tuple(
+            f"{prefix}_difference_{index}"
+            for index, _difference in enumerate(self.differences)
+        )
+
+    def _smt2(
+        self,
+        *,
+        extra_declarations: tuple[str, ...] = (),
+        extra_assertions: tuple[str, ...] = (),
+    ) -> str:
         sort_declarations = tuple(dict.fromkeys((
             *self.left.sort_declarations,
             *self.right.sort_declarations,
         )))
-        declarations = self.left.declarations + self.right.declarations
+        declarations = (
+            self.left.declarations + self.right.declarations
+            + extra_declarations
+        )
         definitions = self.left.definitions + self.right.definitions
         if len(set(declarations)) != len(declarations):
             raise UnsupportedLoweringError(
@@ -124,9 +143,38 @@ class ThermostatPairedQueryEncoding:
                 *self.left.assertions,
                 *self.right.assertions,
                 *self.current_equalities,
-                self.counterexample_assertion,
+                *extra_assertions,
             )),
         )) + "\n"
+
+    def base_smt2(self) -> str:
+        """Return the paired base without any visible-difference assertion."""
+
+        return self._smt2()
+
+    def incremental_smt2(self) -> str:
+        """Guard each difference with an assumption selector.
+
+        A solver can parse and assert this base once, first check that it is
+        satisfiable, then call ``check(selector)`` for every selector.  This is
+        exactly a decomposition of the aggregate disjunction, not a weakening.
+        """
+
+        selectors = self.difference_selectors
+        return self._smt2(
+            extra_declarations=tuple(
+                f"(declare-const {selector} Bool)" for selector in selectors
+            ),
+            extra_assertions=tuple(
+                f"(=> {selector} {difference.assertion})"
+                for selector, difference in zip(selectors, self.differences)
+            ),
+        )
+
+    def smt2(self) -> str:
+        """Return the auditable monolithic counterexample formula."""
+
+        return self._smt2(extra_assertions=(self.counterexample_assertion,))
 
 
 def _compile_side(

@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from clarity.certification.markov_extract import extract_thermostat_markov_ir
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
-from clarity.certification.markov_z3 import SolverStatus, run_smt2_query
+from clarity.certification.markov_z3 import SOLVER_PIPELINE
 from clarity.certification.markov_z3_pair import compile_thermostat_paired_query
 
 
@@ -71,18 +71,55 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                     + len(query.current_equalities) + 1,
                 )
 
-    @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
-    def test_z3_finds_no_paired_markov_counterexample(self):
+    def test_incremental_query_guards_each_complete_difference_once(self):
         for case, query in self.queries.items():
             with self.subTest(case=case):
-                result = run_smt2_query(query.smt2(), timeout_ms=90_000)
-                self.assertIs(
-                    result.status,
-                    SolverStatus.UNSAT,
-                    f"{case}: status={result.status.value}; "
-                    f"query={result.query_sha256}; reason={result.reason}; "
-                    f"model_retained={result.model_smt2 is not None}",
+                incremental = query.incremental_smt2()
+                selectors = query.difference_selectors
+                self.assertEqual(len(selectors), len(query.differences))
+                self.assertEqual(len(selectors), len(set(selectors)))
+                self.assertEqual(
+                    incremental.count("(declare-const ")
+                    - query.base_smt2().count("(declare-const "),
+                    len(selectors),
                 )
+                for selector, difference in zip(selectors, query.differences):
+                    self.assertIn(
+                        f"(assert (=> {selector} {difference.assertion}))",
+                        incremental,
+                    )
+                self.assertNotIn(
+                    f"(assert {query.counterexample_assertion})", incremental,
+                )
+
+    @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
+    def test_z3_finds_no_paired_markov_counterexample(self):
+        import z3
+
+        for case, query in self.queries.items():
+            with self.subTest(case=case):
+                expressions = z3.parse_smt2_string(query.incremental_smt2())
+                solver = z3.Then(*(
+                    z3.Tactic(name) for name in SOLVER_PIPELINE
+                )).solver()
+                solver.set(timeout=30_000)
+                solver.add(*list(expressions))
+                base = solver.check()
+                self.assertEqual(
+                    base, z3.sat,
+                    f"{case}: paired base must be SAT, found {base}; "
+                    f"reason={solver.reason_unknown()}",
+                )
+                for selector, difference in zip(
+                    query.difference_selectors, query.differences,
+                ):
+                    answer = solver.check(z3.Bool(selector))
+                    self.assertEqual(
+                        answer, z3.unsat,
+                        f"{case}/{difference.name}: expected unsat, found "
+                        f"{answer}; reason={solver.reason_unknown()}; "
+                        f"model_retained={answer == z3.sat}",
+                    )
 
 
 if __name__ == "__main__":
