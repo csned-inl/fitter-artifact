@@ -751,9 +751,6 @@ def compile_executed_action_alias_witness(
             "action": quoted_symbol(
                 transition, "boundary-entry", "slice:executed_action",
             ),
-            "proposal": quoted_symbol(
-                transition, "boundary-entry", "slice:policy_proposal",
-            ),
             "cold": quoted_symbol(interface, "definition", "shield-cold"),
             "hot": quoted_symbol(interface, "definition", "shield-hot"),
             "error": quoted_symbol(interface, "definition", "shield-error"),
@@ -774,8 +771,6 @@ def compile_executed_action_alias_witness(
             f"(= {terms['temperature']} {temperature})",
             f"(= {terms['tolerance']} {values['tolerance']})",
             f"(= {terms['action']} {action})",
-            f"(= {terms['proposal']} "
-            f"{enum_constructor('PolicyProposal', 'proposal_0')})",
             f"(= {terms['cold']} {cold})",
             f"(= {terms['hot']} false)",
             f"(= {terms['error']} false)",

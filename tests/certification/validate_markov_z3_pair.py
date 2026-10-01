@@ -226,7 +226,7 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
         query = self.queries["reset_prefix_0"]
         witness = compile_executed_action_alias_witness(query)
         joined = "\n".join(witness.assertions)
-        self.assertEqual(len(witness.assertions), 22)
+        self.assertEqual(len(witness.assertions), 20)
         self.assertIn("#x4035000000000000", witness.left_temperature)
         self.assertIn("#x4035000000000001", witness.right_temperature)
         self.assertEqual(witness.normalized_temperature_bits, "#x3f60f1d2")
