@@ -204,15 +204,44 @@ def _reset_trace_witness_assertions(
         env.close()
 
 
-def _witness_unsat_core(query: str) -> tuple[str, ...]:
-    """Return named witness cells using a core-preserving diagnostic solver."""
+def _named_window_query(window, witness: tuple[str, ...]) -> str:
+    """Render the same formula with every base-assertion family named."""
+
+    groups = (
+        ("candidate_interface", window.candidate.interface.assertions),
+        ("history_padding", window.history_case.padding_assertions),
+        ("historical_steps", window.step_assertions),
+        ("state_bridges", window.state_bridges),
+        ("buffer_correspondence", tuple(
+            item.assertion for item in window.correspondences
+        )),
+    )
+    assertions = []
+    for group, formulas in groups:
+        assertions.extend(
+            f"(assert (! {formula} :named |base::{group}::{index}|))"
+            for index, formula in enumerate(formulas)
+        )
+    assertions.extend(f"(assert {formula})" for formula in witness)
+    return "\n".join((
+        *window.sort_declarations,
+        *window.declarations,
+        *window.definitions,
+        *assertions,
+    )) + "\n"
+
+
+def _window_unsat_core(window, witness: tuple[str, ...]) -> tuple[str, ...]:
+    """Return named base or witness cells from a failed SAT fixture."""
 
     try:
         z3 = importlib.import_module("z3")
         solver = z3.Solver()
         solver.set(timeout=120_000)
         solver.set(unsat_core=True)
-        solver.from_string(canonical_smt2(query))
+        solver.from_string(canonical_smt2(
+            _named_window_query(window, witness)
+        ))
         answer = solver.check()
         if answer != z3.unsat:
             return (
@@ -436,6 +465,23 @@ class HistoryWindowTests(unittest.TestCase):
                 )
                 self.assertEqual(len(witness), 47 * window.transition_copy_count)
 
+    def test_unsat_diagnostic_names_every_base_and_witness_assertion(self):
+        window = self.windows["reset_prefix_1"]
+        witness = _reset_trace_witness_assertions(
+            window, self.slice, self.transition,
+        )
+        query = _named_window_query(window, witness)
+        self.assertEqual(
+            query.count("(assert "), len(window.assertions) + len(witness)
+        )
+        for group in (
+            "candidate_interface", "history_padding", "historical_steps",
+            "state_bridges", "buffer_correspondence",
+        ):
+            self.assertIn(f"|base::{group}::", query)
+        self.assertIn("|witness::0::", query)
+        self.assertIn("|witness::1::", query)
+
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
     def test_each_overapproximating_history_case_is_nonvacuously_satisfiable(self):
         for name, window in self.windows.items():
@@ -448,8 +494,8 @@ class HistoryWindowTests(unittest.TestCase):
                 reason = result.reason
                 if result.status is SolverStatus.UNSAT:
                     reason = (
-                        "concrete witness UNSAT; named witness core="
-                        + repr(_witness_unsat_core(query))
+                        "history-window SAT fixture UNSAT; named core="
+                        + repr(_window_unsat_core(window, witness))
                     )
                 self.assertIs(result.status, SolverStatus.SAT, reason)
 
