@@ -20,8 +20,7 @@ from clarity.certification.markov_contract import (
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import (
-    SOLVER_PIPELINE, SolverStatus, UnsupportedLoweringError, canonical_smt2,
-    run_smt2_query,
+    SolverStatus, UnsupportedLoweringError, canonical_smt2, run_smt2_query,
 )
 from clarity.certification.markov_ir import NativeSort
 from clarity.certification.markov_native_semantics import thermostat_shield_action
@@ -206,13 +205,11 @@ def _reset_trace_witness_assertions(
 
 
 def _witness_unsat_core(query: str) -> tuple[str, ...]:
-    """Return named witness cells from a failed concrete SAT fixture."""
+    """Return named witness cells using a core-preserving diagnostic solver."""
 
     try:
         z3 = importlib.import_module("z3")
-        solver = z3.Then(
-            *(z3.Tactic(name) for name in SOLVER_PIPELINE)
-        ).solver()
+        solver = z3.Solver()
         solver.set(timeout=120_000)
         solver.set(unsat_core=True)
         solver.from_string(canonical_smt2(query))
