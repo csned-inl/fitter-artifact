@@ -53,9 +53,29 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
         for case, query in self.queries.items():
             with self.subTest(case=case):
                 names = {item.name for item in query.differences}
-                self.assertEqual(names, expected)
-                self.assertEqual(len(query.differences), 17)
+                structural = set(query.structural_discharges)
+                self.assertEqual(names | structural, expected)
+                self.assertFalse(names & structural)
+                self.assertEqual(len(query.differences), 15)
+                self.assertEqual(structural, {
+                    "action_availability_mask", "next_buffer_shift",
+                })
                 self.assertTrue(query.counterexample_assertion.startswith("(or "))
+
+    def test_structural_discharges_have_exact_definitions(self):
+        for case, query in self.queries.items():
+            with self.subTest(case=case):
+                for side in (query.left, query.right):
+                    mask = side.candidate.interface.visible(
+                        "action_availability_mask"
+                    )
+                    self.assertEqual((mask.text, mask.availability), ("15", "true"))
+                    self.assertTrue(all(
+                        slot.source.startswith("interface:next_observation.")
+                        or slot.source.startswith("current-slot:")
+                        or slot.source == "interface:executed_action_one_hot"
+                        for slot in side.candidate.next_slots
+                    ))
 
     def test_left_and_right_declarations_are_disjoint(self):
         for case, query in self.queries.items():

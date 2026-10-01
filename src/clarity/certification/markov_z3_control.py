@@ -66,10 +66,11 @@ class ControlRelationEncoding:
         ) + "\n"
 
 
-def compile_control_relation(
+def _compile_control_relation(
     interval: FiniteDecisionInterval,
     *,
-    namespace: str = "run",
+    namespace: str,
+    include_implied_exclusivity: bool,
 ) -> ControlRelationEncoding:
     """Encode a single active path through the finite interval, or fail closed."""
 
@@ -118,7 +119,8 @@ def compile_control_relation(
         out_names = tuple(edge_names[edge] for edge in outgoing[state])
         if state != interval.entry:
             assertions.append(f"(= {state_names[state]} {_or(in_names)})")
-            assertions.extend(_at_most_one(in_names))
+            if include_implied_exclusivity:
+                assertions.extend(_at_most_one(in_names))
         for edge_name in out_names:
             assertions.append(f"(=> {edge_name} {state_names[state]})")
         if state not in exits:
@@ -127,7 +129,8 @@ def compile_control_relation(
 
     exit_names = tuple(state_names[state] for state in interval.exits)
     assertions.append(_or(exit_names))
-    assertions.extend(_at_most_one(exit_names))
+    if include_implied_exclusivity:
+        assertions.extend(_at_most_one(exit_names))
     return ControlRelationEncoding(
         namespace=namespace,
         state_symbols=state_pairs,
@@ -135,3 +138,63 @@ def compile_control_relation(
         exit_symbols=exit_names,
         assertions=tuple(assertions),
     )
+
+
+def compile_control_relation(
+    interval: FiniteDecisionInterval,
+    *,
+    namespace: str = "run",
+) -> ControlRelationEncoding:
+    """Encode the exact single path without implied merge exclusions.
+
+    The interval is an acyclic graph with one active entry.  Every active
+    non-exit state selects exactly one outgoing edge, and every non-entry state
+    is active exactly when an incoming edge is active.  Induction over the DAG
+    therefore gives one path and implies both incoming-edge and final-exit
+    mutual exclusion.  Emitting those pairwise consequences would add
+    quadratic clauses without changing the relation.
+    """
+
+    return _compile_control_relation(
+        interval,
+        namespace=namespace,
+        include_implied_exclusivity=False,
+    )
+
+
+def _compile_pairwise_reference_control_relation(
+    interval: FiniteDecisionInterval,
+    *,
+    namespace: str = "run",
+) -> ControlRelationEncoding:
+    """Retain the original redundant relation for translation validation."""
+
+    return _compile_control_relation(
+        interval,
+        namespace=namespace,
+        include_implied_exclusivity=True,
+    )
+
+
+def validate_control_relation(
+    encoding: ControlRelationEncoding,
+    interval: FiniteDecisionInterval,
+) -> list[str]:
+    """Reconstruct the compact relation and reject any missing constraint."""
+
+    errors: list[str] = []
+    try:
+        expected = compile_control_relation(
+            interval, namespace=encoding.namespace,
+        )
+    except Exception as exc:
+        return [f"control relation cannot be reconstructed: {exc}"]
+    if encoding.state_symbols != expected.state_symbols:
+        errors.append("control state-symbol inventory mismatch")
+    if encoding.edge_symbols != expected.edge_symbols:
+        errors.append("control edge-symbol inventory mismatch")
+    if encoding.exit_symbols != expected.exit_symbols:
+        errors.append("control exit-symbol inventory mismatch")
+    if encoding.assertions != expected.assertions:
+        errors.append("compact control assertion inventory mismatch")
+    return errors

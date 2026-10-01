@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import Counter
 import importlib.util
 import sys
 import unittest
@@ -17,6 +18,10 @@ from clarity.certification.markov_extract import extract_thermostat_markov_ir
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_z3 import SolverStatus, UnsupportedLoweringError, run_smt2_query
 from clarity.certification.markov_z3_control import compile_control_relation
+from clarity.certification.markov_z3_control import (
+    _compile_pairwise_reference_control_relation,
+    validate_control_relation,
+)
 
 
 HAS_Z3 = importlib.util.find_spec("z3") is not None
@@ -40,6 +45,36 @@ class ControlRelationTests(unittest.TestCase):
         self.assertEqual(len(first.exit_symbols), 9)
         self.assertEqual(len({name for _, name in first.state_symbols}), 132)
         self.assertEqual(len({name for _, name in first.edge_symbols}), 281)
+        self.assertEqual(len(first.assertions), 730)
+        self.assertEqual(validate_control_relation(first, self.interval), [])
+
+    def test_compaction_removes_only_implied_pairwise_exclusions(self):
+        compact = compile_control_relation(self.interval, namespace="equivalence")
+        reference = _compile_pairwise_reference_control_relation(
+            self.interval, namespace="equivalence",
+        )
+        self.assertEqual(len(reference.assertions), 2543)
+        self.assertTrue(set(compact.assertions).issubset(reference.assertions))
+        removed = Counter(reference.assertions) - Counter(compact.assertions)
+        self.assertEqual(sum(removed.values()), 1813)
+
+    def test_removed_outgoing_exclusion_is_rejected(self):
+        compact = compile_control_relation(self.interval, namespace="mutated")
+        exclusion = next(
+            assertion for assertion in compact.assertions
+            if assertion.startswith("(not (and ")
+        )
+        mutated = replace(
+            compact,
+            assertions=tuple(
+                assertion for assertion in compact.assertions
+                if assertion != exclusion
+            ),
+        )
+        self.assertIn(
+            "compact control assertion inventory mismatch",
+            validate_control_relation(mutated, self.interval),
+        )
 
     def test_every_edge_is_guarded_by_its_source(self):
         encoding = compile_control_relation(self.interval, namespace="guard")
@@ -62,6 +97,18 @@ class ControlRelationTests(unittest.TestCase):
         encoding = compile_control_relation(self.interval, namespace="sat")
         result = run_smt2_query(encoding.smt2(), timeout_ms=30_000)
         self.assertIs(result.status, SolverStatus.SAT, result.reason)
+
+    @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
+    def test_compact_relation_implies_original_pairwise_relation(self):
+        compact = compile_control_relation(self.interval, namespace="translation")
+        reference = _compile_pairwise_reference_control_relation(
+            self.interval, namespace="translation",
+        )
+        original = f"(and {' '.join(reference.assertions)})"
+        result = run_smt2_query(
+            compact.smt2(f"(not {original})"), timeout_ms=30_000,
+        )
+        self.assertIs(result.status, SolverStatus.UNSAT, result.reason)
 
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
     def test_some_first_outcome_is_forced(self):

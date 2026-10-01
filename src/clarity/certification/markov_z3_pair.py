@@ -103,6 +103,7 @@ class ThermostatPairedQueryEncoding:
     right: HistoryWindowEncoding
     current_equalities: tuple[str, ...]
     differences: tuple[PairedDifferenceEncoding, ...]
+    structural_discharges: tuple[str, ...]
     counterexample_assertion: str
 
     @property
@@ -255,39 +256,62 @@ def compile_thermostat_paired_query(
     right_visible = right.candidate.interface.visible_terms
     if len(left_visible) != len(right_visible):
         raise UnsupportedLoweringError("paired visible-term widths do not match")
-    differences = [
-        PairedDifferenceEncoding(
+    differences = []
+    for left_term, right_term in zip(left_visible, right_visible):
+        if left_term.name == "action_availability_mask":
+            if (
+                left_term.text, left_term.availability,
+                right_term.name, right_term.text, right_term.availability,
+            ) != (
+                "15", "true", "action_availability_mask", "15", "true",
+            ):
+                raise UnsupportedLoweringError(
+                    "action-availability mask is not the checked constant"
+                )
+            continue
+        differences.append(PairedDifferenceEncoding(
             left_term.name,
             _different_visible(left_term, right_term),
-        )
-        for left_term, right_term in zip(left_visible, right_visible)
-    ]
+        ))
 
     left_next = left.candidate.next_slots
     right_next = right.candidate.next_slots
     if len(left_next) != len(right_next):
         raise UnsupportedLoweringError("paired next-buffer widths do not match")
-    next_slot_differences = []
+    allowed_next_sources = {
+        "interface:next_observation.setPoint.float32_bits",
+        "interface:next_observation.temperatureCelcius.float32_bits",
+        "interface:executed_action_one_hot",
+        *(f"current-slot:{slot.index}" for slot in left_slots),
+    }
     for left_slot, right_slot in zip(left_next, right_next):
         _validate_slot_pair(left_slot, right_slot)
-        next_slot_differences.append(
-            f"(not {_equal(left_slot.text, right_slot.text, NativeSort.FLOAT32)})"
-        )
-    left_available = left.candidate.next_available
-    right_available = right.candidate.next_available
-    next_buffer_difference = _or(
-        f"(not (= {left_available} {right_available}))",
-        _and(left_available, right_available, _or(*next_slot_differences)),
-    )
-    differences.append(PairedDifferenceEncoding(
-        "next_buffer_shift", next_buffer_difference,
-    ))
+        if left_slot.source != right_slot.source \
+                or left_slot.source not in allowed_next_sources:
+            raise UnsupportedLoweringError(
+                "next-buffer slot lacks an exact compared source"
+            )
 
     names = tuple(item.name for item in differences)
-    expected_names = {term.name for term in slice_.visible_terms}
+    structural_discharges = (
+        "action_availability_mask",
+        "next_buffer_shift",
+    )
+    expected_names = {
+        term.name for term in slice_.visible_terms
+        if term.name not in structural_discharges
+    }
     if set(names) != expected_names or len(names) != len(set(names)):
         raise UnsupportedLoweringError(
             "paired query difference inventory is incomplete or duplicated"
+        )
+    if not {
+        "executed_action",
+        "next_observation.setPoint.float32_bits",
+        "next_observation.temperatureCelcius.float32_bits",
+    }.issubset(names):
+        raise UnsupportedLoweringError(
+            "next-buffer structural discharge lacks a compared source"
         )
     counterexample = _or(*(item.assertion for item in differences))
     return ThermostatPairedQueryEncoding(
@@ -297,6 +321,7 @@ def compile_thermostat_paired_query(
         right=right,
         current_equalities=tuple(current_equalities),
         differences=tuple(differences),
+        structural_discharges=structural_discharges,
         counterexample_assertion=counterexample,
     )
 
