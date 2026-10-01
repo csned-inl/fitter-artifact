@@ -9,6 +9,12 @@ thermostat implementation sequence. It authorizes no implementation by itself. I
 here conflicts with the governing proof design, the governing design wins.
 It does not revive or authorize the frozen legacy `lazy_*` verification path.
 
+**Standing engineering use:** every later proof-lowering change should consult Sections 2, 4,
+5, 8, and 9 as anti-redundancy guidance. Exact structural sharing, sparse state transport, and
+demand-driven construction are preferred by default. This standing use still does not permit a
+semantic constraint, path, outcome, or obligation to be removed without the governing design's
+independently checked preservation evidence.
+
 **Critical review result:** the optimizer's own root list, dependency graph, rewrite ledger, or
 cache cannot establish that the optimizer omitted nothing. The checker must independently
 regenerate the unreduced counterexample obligation and validate the optimized result against

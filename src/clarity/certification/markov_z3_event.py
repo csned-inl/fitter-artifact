@@ -24,8 +24,10 @@ SCALAR_SORTS = {
 }
 SUPPORTED_OPERATIONS = {"assign", "branch", "advance_engine_time", "set_dt"}
 
-_ENUM_CONSTRUCTORS = {
+ENUM_CONSTRUCTORS = {
     "ExecutedAction": ("action_0", "action_1", "action_2", "action_3"),
+    "ExecutionError": ("no_execution_error", "execution_error"),
+    "OutcomeConstructor": ("outcome_continue", "outcome_terminal", "outcome_error"),
     "PolicyProposal": ("proposal_0", "proposal_1", "proposal_2", "proposal_3"),
     "HeaterBehaviorState": ("reset", "on"),
     "PropertyStatus": ("property_true", "property_false"),
@@ -79,12 +81,14 @@ class ScalarEventEncoding:
         return "\n".join(lines) + "\n"
 
 
-def _enum_sort(declared_type: str) -> str:
+def enum_sort(declared_type: str) -> str:
     return quoted_symbol("enum-sort", declared_type)
 
 
-def _enum_constructor(declared_type: str, constructor: str) -> str:
-    allowed = _ENUM_CONSTRUCTORS.get(declared_type)
+def enum_constructor(declared_type: str, constructor: str) -> str:
+    """Return one checked datatype constructor or fail closed."""
+
+    allowed = ENUM_CONSTRUCTORS.get(declared_type)
     if allowed is None or constructor not in allowed:
         raise UnsupportedLoweringError(
             f"unknown constructor {constructor!r} for {declared_type!r}"
@@ -92,12 +96,31 @@ def _enum_constructor(declared_type: str, constructor: str) -> str:
     return quoted_symbol("enum", declared_type, constructor)
 
 
+def enum_sort_declarations(declared_types) -> tuple[str, ...]:
+    """Declare the requested checked enum sorts in deterministic order."""
+
+    result = []
+    for declared_type in sorted(set(declared_types)):
+        constructors = ENUM_CONSTRUCTORS.get(declared_type)
+        if constructors is None:
+            raise UnsupportedLoweringError(
+                f"enum type has no checked constructors: {declared_type!r}"
+            )
+        sort = enum_sort(declared_type)
+        values = " ".join(
+            enum_constructor(declared_type, constructor)
+            for constructor in constructors
+        )
+        result.append(f"(declare-datatypes () (({sort} {values})))")
+    return tuple(result)
+
+
 def _storage_sort(storage: IRStorage) -> str:
     sort = storage.identity.native_sort
     if sort in SCALAR_SORTS:
         return smt_sort(sort)
     if sort is NativeSort.ENUM:
-        return _enum_sort(storage.identity.declared_type)
+        return enum_sort(storage.identity.declared_type)
     raise UnsupportedLoweringError(
         f"event state contains a forbidden sort: {sort.value}"
     )
@@ -108,19 +131,7 @@ def _sort_declarations(slice_: TheoremSlice) -> tuple[str, ...]:
         storage.identity.declared_type for storage in slice_.storages
         if storage.identity.native_sort is NativeSort.ENUM
     })
-    result = []
-    for declared_type in declared_types:
-        sort = _enum_sort(declared_type)
-        constructors = _ENUM_CONSTRUCTORS.get(declared_type)
-        if constructors is None:
-            result.append(f"(declare-sort {sort} 0)")
-        else:
-            values = " ".join(
-                _enum_constructor(declared_type, constructor)
-                for constructor in constructors
-            )
-            result.append(f"(declare-datatypes () (({sort} {values})))")
-    return tuple(result)
+    return enum_sort_declarations(declared_types)
 
 
 def compile_scalar_event(
@@ -232,9 +243,9 @@ def compile_scalar_event(
             raise UnsupportedLoweringError("executed-action interface mismatch")
         action = entry["slice:executed_action"]
         action_type = state["slice:executed_action"].identity.declared_type
-        a1 = _enum_constructor(action_type, "action_1")
-        a2 = _enum_constructor(action_type, "action_2")
-        a3 = _enum_constructor(action_type, "action_3")
+        a1 = enum_constructor(action_type, "action_1")
+        a2 = enum_constructor(action_type, "action_2")
+        a3 = enum_constructor(action_type, "action_3")
         updates.extend((
             f"(= {exit_['graph:system::controller::policyCall::heaterState']} "
             f"(or (= {action} {a1}) (= {action} {a3})))",
@@ -254,7 +265,7 @@ def compile_scalar_event(
         command = f"slice:command:{machine}:{data.get('to')}"
         if writes != {target, command}:
             raise UnsupportedLoweringError("machine finish write identities mismatch")
-        constructor = _enum_constructor(
+        constructor = enum_constructor(
             storage.identity.declared_type, data.get("to")
         )
         updates.extend((
@@ -275,7 +286,7 @@ def compile_scalar_event(
         saved_uid = f"slice:machine:{machine}:saved_mode"
         if event.reads != (saved_uid,):
             raise UnsupportedLoweringError("saved machine-mode read mismatch")
-        expected = _enum_constructor(
+        expected = enum_constructor(
             storage.identity.declared_type, data.get("expected")
         )
         branch_condition = SMTTerm(
@@ -390,9 +401,9 @@ def compile_scalar_event(
                 )
             status_type = state[status_uid].identity.declared_type
             error_type = state[error_uid].identity.declared_type
-            true_value = _enum_constructor(status_type, "property_true")
-            false_value = _enum_constructor(status_type, "property_false")
-            no_error = _enum_constructor(error_type, "no_error")
+            true_value = enum_constructor(status_type, "property_true")
+            false_value = enum_constructor(status_type, "property_false")
+            no_error = enum_constructor(error_type, "no_error")
             updates.extend((
                 f"(= {exit_[status_uid]} (ite (and "
                 f"(= {entry[status_uid]} {true_value}) {term.text}) "

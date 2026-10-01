@@ -18,7 +18,8 @@ from clarity.certification.markov_interval import derive_thermostat_decision_int
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import SolverStatus, UnsupportedLoweringError, run_smt2_query
 from clarity.certification.markov_z3_event import (
-    SUPPORTED_OPERATIONS, compile_scalar_event, supports_scalar_event,
+    SUPPORTED_OPERATIONS, compile_scalar_event, enum_sort_declarations,
+    supports_scalar_event,
 )
 
 
@@ -92,6 +93,10 @@ class ScalarEventTests(unittest.TestCase):
         event = replace(self.sliced["cycle/check"], operation="unknown")
         with self.assertRaises(UnsupportedLoweringError):
             compile_scalar_event(self.slice, self.source[event.node_id], event)
+
+    def test_unknown_enum_sort_fails_closed(self):
+        with self.assertRaises(UnsupportedLoweringError):
+            enum_sort_declarations(("UnspecifiedRuntimeEnum",))
 
     def test_constraint_solve_is_four_exact_copies(self):
         encoding = self.encoding("cycle/solve")

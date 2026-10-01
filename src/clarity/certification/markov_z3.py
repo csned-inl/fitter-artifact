@@ -2,9 +2,10 @@
 
 This module owns solver invocation, query hashing, result classification, and
 same-query replay.  It deliberately does not yet lower a thermostat
-``ObligationManifest``: production lowering remains unsupported until the
-native operation table and interface equations are checked.  Small theorem
-fixtures can use this boundary now without creating a false certificate path.
+``ObligationManifest``: production lowering remains unsupported until buffer
+history, paired-run, reachability, and visible-difference lowering are checked.
+Small theorem fixtures can use this boundary now without creating a false
+certificate path.
 """
 
 from __future__ import annotations
@@ -199,5 +200,6 @@ def compile_manifest_obligation(*_args, **_kwargs):
     """Reserved production boundary; no obligation is silently approximated."""
 
     raise UnsupportedLoweringError(
-        "thermostat obligation lowering awaits the checked native operation table"
+        "thermostat obligation lowering awaits checked history, paired-run, "
+        "reachability, and visible-difference relations"
     )

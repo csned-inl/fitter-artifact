@@ -46,7 +46,9 @@ def quoted_symbol(*components: str) -> str:
     return f"|{value}|"
 
 
-def _fp_literal(value: float, sort: NativeSort) -> str:
+def fp_literal(value: float, sort: NativeSort) -> str:
+    """Return the exact IEEE bit-pattern literal for a finite Python float."""
+
     if not math.isfinite(value):
         raise UnsupportedLoweringError("non-finite source literals are unsupported")
     if sort is NativeSort.FLOAT64:
@@ -109,7 +111,7 @@ class ThermostatExpressionCompiler:
             return SMTTerm(str(value), NativeSort.INT, value)
         if declared == "Real" and type(value) in {int, float}:
             converted = float(value)
-            return SMTTerm(_fp_literal(converted, NativeSort.FLOAT64),
+            return SMTTerm(fp_literal(converted, NativeSort.FLOAT64),
                            NativeSort.FLOAT64, converted)
         raise UnsupportedLoweringError(
             f"unsupported or ill-typed literal: {declared!r} {value!r}"
@@ -122,11 +124,11 @@ class ThermostatExpressionCompiler:
         floating = {NativeSort.FLOAT32, NativeSort.FLOAT64}
         if left.sort in floating and right.sort is NativeSort.INT \
                 and type(right.literal) is int:
-            return left, SMTTerm(_fp_literal(float(right.literal), left.sort),
+            return left, SMTTerm(fp_literal(float(right.literal), left.sort),
                                  left.sort, float(right.literal))
         if right.sort in floating and left.sort is NativeSort.INT \
                 and type(left.literal) is int:
-            return SMTTerm(_fp_literal(float(left.literal), right.sort),
+            return SMTTerm(fp_literal(float(left.literal), right.sort),
                            right.sort, float(left.literal)), right
         raise UnsupportedLoweringError(
             f"implicit coercion is unsupported: {left.sort.value}, {right.sort.value}"

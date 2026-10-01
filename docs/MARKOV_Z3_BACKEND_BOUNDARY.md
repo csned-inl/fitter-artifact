@@ -25,8 +25,11 @@ be `SAT`. These fixtures validate the solver boundary but do not establish the
 thermostat theorem.
 
 Production `ObligationManifest` lowering still raises
-`UnsupportedLoweringError`. That boundary remains closed until the native
-operation semantic table and exact shield/reward/outcome equations are checked.
+`UnsupportedLoweringError`. The native operation table and the sparse
+controller-visible shield/reward/outcome interface are now checked. The
+production boundary remains closed until exact buffer-history, paired-run,
+reachability/invariant, progress-query, and visible-difference lowering are
+also checked.
 Consequently, the workstation gate may report `z3_fixture_status: passed` while
 it must still report `certificate_claimed: false` and a not-run production
 proof status.

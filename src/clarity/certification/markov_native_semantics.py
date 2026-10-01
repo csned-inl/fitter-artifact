@@ -43,8 +43,8 @@ _EXPECTED_OPERATION_RULES = {
     "solve_source_constraints": "ordered_convergent_constraints_then_single_source_flows",
 }
 _EXPECTED_SHIELD_ORDER = [
-    "temperatureCelcius <= setPoint - tolerance => 1",
-    "temperatureCelcius >= setPoint + tolerance => 2",
+    "setPoint >= temperatureCelcius + tolerance => 1",
+    "setPoint <= temperatureCelcius - tolerance => 2",
     "otherwise => 0",
 ]
 _EXPECTED_OUTCOME_PRIORITY = [
@@ -57,6 +57,18 @@ _EXPECTED_OUTCOME_PRIORITY = [
     {"condition": "next_decision",
      "constructor": "continue", "reward": -0.01},
 ]
+_EXPECTED_PRE_TRANSITION_SHIELD_ERROR = {
+    "constructor": "error",
+    "reward": 0.0,
+    "elapsed_ticks": 0,
+    "elapsed_time": 0.0,
+    "executed_action": "unavailable",
+    "next_observation": "unavailable",
+    "requirement_events": "unavailable",
+}
+_EXPECTED_REQUIREMENT_RESULT_AVAILABILITY = (
+    "available_iff_cycle_check_reached_after_successful_shield"
+)
 
 
 @dataclass(frozen=True)
@@ -91,8 +103,10 @@ def thermostat_shield_action(
 
     if type(proposal) is not int or proposal not in {0, 1, 2, 3}:
         raise ValueError("proposal is outside the four-action source domain")
-    cold = temperature <= set_point - tolerance
-    hot = temperature >= set_point + tolerance
+    # Preserve the source AST's binary64 operation order.  Algebraically
+    # moving tolerance across either comparison is not IEEE-754 exact.
+    cold = set_point >= temperature + tolerance
+    hot = set_point <= temperature - tolerance
     if cold and hot:
         raise ValueError("thermostat requirement has no legal Boolean action")
     required = 1 if cold else 2 if hot else 0
@@ -182,6 +196,9 @@ def validate_thermostat_native_semantics(
         errors.append("native-semantics action-history convention mismatch")
     if shield.get("required_action_order") != _EXPECTED_SHIELD_ORDER:
         errors.append("native-semantics shield equation mismatch")
+    if selected.get("pre_transition_shield_error") != \
+            _EXPECTED_PRE_TRANSITION_SHIELD_ERROR:
+        errors.append("native-semantics pre-transition shield-error mismatch")
 
     observation = selected.get("observation", {})
     if observation.get("scale") != controller["observation"]["observation_scale"]:
@@ -193,6 +210,9 @@ def validate_thermostat_native_semantics(
 
     if selected.get("phase2_outcome_priority") != _EXPECTED_OUTCOME_PRIORITY:
         errors.append("native-semantics Phase-2 outcome priority mismatch")
+    if selected.get("requirement_result_availability") != \
+            _EXPECTED_REQUIREMENT_RESULT_AVAILABILITY:
+        errors.append("native-semantics requirement-result availability mismatch")
     if selected.get("time_limit_truncation") != "excluded_wrapper_outcome":
         errors.append("native-semantics truncation classification mismatch")
     return errors

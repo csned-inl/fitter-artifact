@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -46,6 +47,27 @@ class NativeSemanticsTests(unittest.TestCase):
                     temperature=temperature, tolerance=tolerance,
                 )
                 self.assertEqual(shield(proposal, raw), expected)
+
+    def test_shield_preserves_binary64_operation_order(self):
+        # Reassociating the hot comparison as
+        # temperature >= set_point + tolerance changes this IEEE-754 case.
+        set_point = math.nextafter(0.0, math.inf)
+        temperature = 1.0
+        tolerance = 1.0
+        self.assertFalse(set_point <= temperature - tolerance)
+        self.assertTrue(temperature >= set_point + tolerance)
+        expected = thermostat_shield_action(
+            0, set_point=set_point, temperature=temperature,
+            tolerance=tolerance,
+        )
+        self.assertEqual(expected, 0)
+        model = repository_root() / "src/clarity/models/thermostat/model.sysml"
+        shield = SpecShield(str(model))
+        self.assertEqual(shield(0, {
+            "setPoint": set_point,
+            "temperatureCelcius": temperature,
+            "done": False,
+        }), expected)
 
     def test_observation_encoding_matches_numpy_float32_bits(self):
         scale = load_native_semantics_contract()["observation"]["scale"]
@@ -107,6 +129,14 @@ class NativeSemanticsTests(unittest.TestCase):
         contract["shield"]["history_records"] = "proposed_action"
         self.assertIn(
             "native-semantics action-history convention mismatch",
+            validate_thermostat_native_semantics(contract),
+        )
+
+    def test_shield_error_visibility_mutation_is_rejected(self):
+        contract = deepcopy(load_native_semantics_contract())
+        contract["pre_transition_shield_error"]["elapsed_ticks"] = 1
+        self.assertIn(
+            "native-semantics pre-transition shield-error mismatch",
             validate_thermostat_native_semantics(contract),
         )
 
