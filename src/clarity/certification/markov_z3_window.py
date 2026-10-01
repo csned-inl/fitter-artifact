@@ -49,7 +49,61 @@ from .markov_z3_transition import (
 INITIAL_STATE_PREMISE = "true_type_domain_overapproximation"
 
 
-def _reinitialized_uids(ir: MarkovIR) -> tuple[str, ...]:
+def _validate_boundary_local_reinitialization(
+    slice_: TheoremSlice,
+    interval: FiniteDecisionInterval,
+    local_uids: set[str],
+) -> None:
+    """Require every boundary-local read to be dominated by a write.
+
+    A local may be left unbridged between decisions only when its incoming
+    value cannot influence the transition.  The finite interval is a DAG, so
+    a forward must-analysis can check that every path writes each local before
+    any event reads it.  Reads are checked before same-event writes, matching
+    the event-local entry/exit SSA convention.
+    """
+
+    events = {event.node_id: event for event in slice_.events}
+    predecessors = {state: [] for state in interval.states}
+    for edge in interval.edges:
+        predecessors[edge.target].append(edge.source)
+
+    after: dict[object, set[str]] = {}
+    written_somewhere: set[str] = set()
+    for state in interval.topological_order:
+        if state == interval.entry:
+            before: set[str] = set()
+        else:
+            incoming = predecessors[state]
+            if not incoming:
+                raise UnsupportedLoweringError(
+                    "boundary-local dominance encountered an unreachable state"
+                )
+            before = set.intersection(*(after[parent] for parent in incoming))
+        event = events.get(state.node_id)
+        reads = set(event.reads) if event is not None else set()
+        writes = set(event.writes) if event is not None else set()
+        unsafe = (reads & local_uids) - before
+        if unsafe:
+            raise UnsupportedLoweringError(
+                "boundary-local storage read before dominating initialization: "
+                + ", ".join(sorted(unsafe))
+            )
+        written_somewhere.update(writes & local_uids)
+        after[state] = before | (writes & local_uids)
+
+    if written_somewhere != local_uids:
+        raise UnsupportedLoweringError(
+            "boundary-local storage lacks an interval initialization: "
+            + ", ".join(sorted(local_uids - written_somewhere))
+        )
+
+
+def _reinitialized_uids(
+    ir: MarkovIR,
+    slice_: TheoremSlice,
+    interval: FiniteDecisionInterval,
+) -> tuple[str, ...]:
     values = {
         "slice:policy_proposal",
         "slice:executed_action",
@@ -57,6 +111,14 @@ def _reinitialized_uids(ir: MarkovIR) -> tuple[str, ...]:
         "slice:shield:temperatureCelcius",
         "slice:shield:done",
     }
+    boundary_locals = {
+        "slice:machine:ac:saved_mode",
+        "slice:machine:heater:saved_mode",
+    }
+    _validate_boundary_local_reinitialization(
+        slice_, interval, boundary_locals,
+    )
+    values.update(boundary_locals)
     for name in ir.required_properties:
         slug = name.replace(" ", "_").lower()
         values.update((
@@ -285,7 +347,7 @@ def compile_history_window(
     all_state_uids = {
         storage.identity.uid for storage in slice_.storages
     }
-    reinitialized = _reinitialized_uids(ir)
+    reinitialized = _reinitialized_uids(ir, slice_, interval)
     if not set(reinitialized).issubset(all_state_uids):
         raise UnsupportedLoweringError(
             "history-window boundary initializer references unknown storage"

@@ -30,7 +30,8 @@ from clarity.certification.markov_z3_history import compile_buffer_history
 from clarity.certification.markov_z3_interface import compile_thermostat_interface
 from clarity.certification.markov_z3_transition import compile_transition_relation
 from clarity.certification.markov_z3_window import (
-    INITIAL_STATE_PREMISE, compile_history_window,
+    INITIAL_STATE_PREMISE, _validate_boundary_local_reinitialization,
+    compile_history_window,
 )
 from clarity.runtime.env import SysMLEnv
 from clarity.sysml.simulator import resolve_value
@@ -83,6 +84,16 @@ def _reset_trace_witness_assertions(
             engine = env._twin._engine
             state = engine.state
             model_inputs = env.model_inputs
+
+            def pending(machine, type_name):
+                mailbox = engine.port_mailboxes.get(
+                    f"system::{machine}::cmdIn", []
+                )
+                return any(
+                    engine._is_subtype(item.get("type"), type_name)
+                    for item in mailbox
+                )
+
             executed = thermostat_shield_action(
                 0,
                 set_point=float(model_inputs["setPoint"]),
@@ -150,10 +161,16 @@ def _reset_trace_witness_assertions(
                 "slice:machine:heater:saved_mode": engine.current_sm_state[
                     "system::heater"
                 ],
-                "slice:command:ac:on": False,
-                "slice:command:ac:reset": False,
-                "slice:command:heater:on": False,
-                "slice:command:heater:reset": False,
+                "slice:command:ac:on": pending("ac", "HeatingCoolingOnCmd"),
+                "slice:command:ac:reset": pending(
+                    "ac", "HeatingCoolingResetCmd"
+                ),
+                "slice:command:heater:on": pending(
+                    "heater", "HeatingCoolingOnCmd"
+                ),
+                "slice:command:heater:reset": pending(
+                    "heater", "HeatingCoolingResetCmd"
+                ),
             }
             for name in contract["required_properties"]:
                 slug = name.replace(" ", "_").lower()
@@ -307,7 +324,7 @@ class HistoryWindowTests(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertEqual(len(window.declarations), 643 + 635 * step_count)
                 self.assertEqual(len(window.definitions), 38 + 25 * step_count)
-                self.assertEqual(len(window.state_bridges), 35 * step_count)
+                self.assertEqual(len(window.state_bridges), 33 * step_count)
                 self.assertEqual(len(set(window.declarations)),
                                  len(window.declarations))
                 self.assertTrue(all(
@@ -336,8 +353,8 @@ class HistoryWindowTests(unittest.TestCase):
         for window in self.windows.values():
             carried = set(window.carried_state_uids)
             reinitialized = set(window.reinitialized_uids)
-            self.assertEqual(len(carried), 35)
-            self.assertEqual(len(reinitialized), 11)
+            self.assertEqual(len(carried), 33)
+            self.assertEqual(len(reinitialized), 13)
             self.assertFalse(carried.intersection(reinitialized))
             for index, step in enumerate(window.steps):
                 target = (
@@ -346,7 +363,7 @@ class HistoryWindowTests(unittest.TestCase):
                 )
                 target_symbols = dict(target.boundary_entry_terms)
                 matching = window.state_bridges[
-                    index * 35:(index + 1) * 35
+                    index * 33:(index + 1) * 33
                 ]
                 self.assertEqual(len(matching), len(carried))
                 self.assertTrue(all(
@@ -366,6 +383,8 @@ class HistoryWindowTests(unittest.TestCase):
         self.assertIn("slice:shield:setPoint", steady.reinitialized_uids)
         self.assertIn("slice:shield:temperatureCelcius", steady.reinitialized_uids)
         self.assertIn("slice:shield:done", steady.reinitialized_uids)
+        self.assertIn("slice:machine:ac:saved_mode", steady.reinitialized_uids)
+        self.assertIn("slice:machine:heater:saved_mode", steady.reinitialized_uids)
         self.assertEqual(sum(":property:" in uid
                              for uid in steady.reinitialized_uids), 6)
         bridges = "\n".join(steady.state_bridges)
@@ -377,6 +396,24 @@ class HistoryWindowTests(unittest.TestCase):
             )
             self.assertNotIn(target["slice:executed_action"], bridges)
             self.assertNotIn(target["slice:policy_proposal"], bridges)
+            self.assertNotIn(target["slice:machine:ac:saved_mode"], bridges)
+            self.assertNotIn(target["slice:machine:heater:saved_mode"], bridges)
+
+    def test_boundary_local_reinitialization_fails_without_dominating_write(self):
+        target = "slice:machine:heater:saved_mode"
+        mutated_events = tuple(
+            replace(event, writes=tuple(uid for uid in event.writes if uid != target))
+            if event.node_id == "system::heater/machine/entry" else event
+            for event in self.slice.events
+        )
+        mutated_slice = replace(self.slice, events=mutated_events)
+        with self.assertRaisesRegex(
+            UnsupportedLoweringError,
+            "read before dominating initialization",
+        ):
+            _validate_boundary_local_reinitialization(
+                mutated_slice, self.interval, {target},
+            )
 
     def test_direct_lag_projection_matches_repeated_shift(self):
         steady = self.windows["steady_state"]
@@ -470,6 +507,17 @@ class HistoryWindowTests(unittest.TestCase):
                     window, self.slice, self.transition,
                 )
                 self.assertEqual(len(witness), 46 * window.transition_copy_count)
+
+    def test_concrete_witness_preserves_pending_source_commands(self):
+        witness = _reset_trace_witness_assertions(
+            self.windows["reset_prefix_1"], self.slice, self.transition,
+        )
+        heater_reset = [
+            assertion for assertion in witness
+            if "witness::1::slice:command:heater:reset" in assertion
+        ]
+        self.assertEqual(len(heater_reset), 1)
+        self.assertIn(" true)", heater_reset[0])
 
     def test_unsat_diagnostic_labels_every_base_and_witness_assertion(self):
         window = self.windows["reset_prefix_1"]

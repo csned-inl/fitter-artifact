@@ -14,9 +14,9 @@ exactly `t` transitions. Each historical transition:
 - uses one checked sparse transition relation;
 - is constrained to reach the unique next-decision exit;
 - must have a continuing controller outcome;
-- bridges all 35 persistent typed state cells to the next boundary;
-- freshly initializes the 11 per-decision proposal, executed-action,
-  shield-input, and property-accumulator cells; and
+- bridges all 33 persistent typed state cells to the next boundary;
+- freshly initializes the 13 per-decision proposal, executed-action,
+  shield-input, property-accumulator, and machine-entry-local cells; and
 - exposes its boundary observation and shield-selected executed action for
   final-buffer correspondence.
 
@@ -25,12 +25,19 @@ For `b_obs=2, b_act=1`:
 | Case | Historical transitions | Total transition copies including current | State bridges | Buffer correspondences |
 |---|---:|---:|---:|---:|
 | `reset_prefix_0` | 0 | 1 | 0 | 0 |
-| `reset_prefix_1` | 1 | 2 | 35 | 6 |
-| `steady_state` | 2 | 3 | 70 | 8 |
+| `reset_prefix_1` | 1 | 2 | 33 | 6 |
+| `steady_state` | 2 | 3 | 66 | 8 |
 
 The case formula is constructed once and is reusable for every later
 visible-difference predicate. No transition is copied per predicate and no
 control-flow path is enumerated.
+
+The two `saved_mode` cells are machine-call scratch locals, not state that
+persists across controller decisions. A forward must-analysis over the finite
+control DAG checks that machine entry writes each local on every path before
+its first read. Only after that dominance check may the window omit their
+cross-decision bridges; a source or slice change that breaks the property
+fails closed.
 
 `lastObservedTemperature` is absent from these bridges because the source
 declares it as a live binding to `thermometer.lastReadingCelcius`. Carrying it
@@ -92,7 +99,9 @@ decision in the finite window, so Z3 verifies the encoded transitions instead
 of searching for an arbitrary floating-point trajectory. Source Boolean
 policy-call outputs are uninitialized only at reset and overwritten before
 their first read; the witness embeds those `None` values as the typed
-representative `false`.
+representative `false`. Command-presence cells are read from the simulator's
+actual port mailboxes rather than assumed empty, because an unmatched command
+can persist across a decision boundary.
 
 This witness is deliberately restricted to the `SAT` non-vacuity query. It is
 never added to a visible-difference or correspondence `UNSAT` query. Therefore
