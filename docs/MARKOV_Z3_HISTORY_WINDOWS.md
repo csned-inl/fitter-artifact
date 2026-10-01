@@ -80,6 +80,20 @@ checks also reject noncanonical buffer encodings, missing cases, altered
 normalization, declaration loss, incomplete state bridges, and namespace
 aliasing.
 
+The non-vacuity check supplies Z3 with one concrete, continuing reset trace
+from the source simulator. It fixes all 47 typed boundary cells at every
+decision in the finite window, so Z3 verifies the encoded transitions instead
+of searching for an arbitrary floating-point trajectory. Source Boolean
+policy-call outputs are uninitialized only at reset and overwritten before
+their first read; the witness embeds those `None` values as the typed
+representative `false`.
+
+This witness is deliberately restricted to the `SAT` non-vacuity query. It is
+never added to a visible-difference or correspondence `UNSAT` query. Therefore
+it cannot hide a counterexample or strengthen a proof premise: satisfiability
+under the witness implies satisfiability of the unconstrained base, while a
+witness timeout or mismatch merely fails the gate and proves nothing.
+
 The production `ObligationManifest` remains untouched: all query and
 structural statuses are still `NOT_RUN`, the reachability premise is still
 open, and `certificate_ready` remains false.

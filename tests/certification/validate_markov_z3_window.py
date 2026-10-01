@@ -14,20 +14,193 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from clarity.certification.markov_extract import extract_thermostat_markov_ir
+from clarity.certification.markov_contract import (
+    load_controller_step_contract, repository_root,
+)
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import (
     SolverStatus, UnsupportedLoweringError, run_smt2_query,
 )
+from clarity.certification.markov_ir import NativeSort
+from clarity.certification.markov_native_semantics import thermostat_shield_action
+from clarity.certification.markov_z3_event import enum_constructor
+from clarity.certification.markov_z3_expr import fp_literal
 from clarity.certification.markov_z3_history import compile_buffer_history
 from clarity.certification.markov_z3_interface import compile_thermostat_interface
 from clarity.certification.markov_z3_transition import compile_transition_relation
 from clarity.certification.markov_z3_window import (
     INITIAL_STATE_PREMISE, compile_history_window,
 )
+from clarity.runtime.env import SysMLEnv
+from clarity.sysml.simulator import resolve_value
 
 
 HAS_Z3 = importlib.util.find_spec("z3") is not None
+
+
+def _reset_trace_witness_assertions(
+    window, slice_, candidate_transition,
+) -> tuple[str, ...]:
+    """Constrain only SAT search with one concrete continuing reset trace.
+
+    These assertions are never part of a theorem query.  SAT under additional
+    witness constraints proves that the unconstrained history base is
+    nonempty; failure to find this witness proves nothing about the theorem.
+    """
+
+    contract = load_controller_step_contract()
+    model = repository_root() / contract["model"]["path"]
+    env = SysMLEnv(
+        str(model),
+        dt=contract["model"]["dt"],
+        phase=2,
+        observation_scale=contract["observation"]["observation_scale"],
+        rng_seed=0,
+    )
+    try:
+        result = env.reset_with_result(seed=0)
+        if result.outcome != "decision":
+            raise AssertionError("concrete nonvacuity witness did not reach a decision")
+        storage = {
+            item.identity.uid: item.identity
+            for item in slice_.storages
+        }
+
+        def term(uid, value):
+            identity = storage[uid]
+            if identity.native_sort is NativeSort.FLOAT64:
+                return fp_literal(float(value), NativeSort.FLOAT64)
+            if identity.native_sort in {NativeSort.BOOL, NativeSort.PRESENCE}:
+                if type(value) is not bool:
+                    raise AssertionError(f"Boolean witness is ill-typed: {uid}")
+                return "true" if value else "false"
+            if identity.native_sort is NativeSort.ENUM:
+                return enum_constructor(identity.declared_type, str(value))
+            raise AssertionError(f"unsupported witness sort: {uid}")
+
+        def snapshot():
+            engine = env._twin._engine
+            state = engine.state
+            model_inputs = env.model_inputs
+            executed = thermostat_shield_action(
+                0,
+                set_point=float(model_inputs["setPoint"]),
+                temperature=float(model_inputs["temperatureCelcius"]),
+                tolerance=float(resolve_value(
+                    state, "system::controller::toleranceCelcius"
+                )),
+            )
+            semantic = {
+                "semantic:physical_temperature": resolve_value(
+                    state, "system::environment::temperatureCelcius"
+                ),
+                "semantic:held_temperature": resolve_value(
+                    state, "system::thermometer::lastReadingCelcius"
+                ),
+                "semantic:sent_temperature_payload": resolve_value(
+                    state,
+                    "system::thermometer::temperatureReading::temperatureCelcius",
+                ),
+                "semantic:received_temperature_payload": resolve_value(
+                    state, "system::controller::reading::temperatureCelcius"
+                ),
+                "semantic:heater_command_flag": resolve_value(
+                    state, "system::controller::heaterOn"
+                ),
+                "semantic:ac_command_flag": resolve_value(
+                    state, "system::controller::acOn"
+                ),
+                "semantic:heater_output": resolve_value(
+                    state, "system::heater::heatOut::heat::rateWatts"
+                ),
+                "semantic:ac_output": resolve_value(
+                    state, "system::ac::heatOut::heat::rateWatts"
+                ),
+                "semantic:heater_mode": engine.current_sm_state["system::heater"],
+                "semantic:ac_mode": engine.current_sm_state["system::ac"],
+                "semantic:source_time": resolve_value(
+                    state, "system::currentTime"
+                ),
+                "semantic:engine_time": engine.time,
+                "semantic:set_point": resolve_value(
+                    state, "system::controller::setPointCelcius"
+                ),
+                "semantic:tolerance": resolve_value(
+                    state, "system::controller::toleranceCelcius"
+                ),
+                "semantic:outside_temperature": resolve_value(
+                    state, "system::environment::outsideTemperatureCelcius"
+                ),
+                "semantic:thermometer_payload_present": False,
+                "semantic:latched_completion": bool(model_inputs["done"]),
+            }
+            synthetic = {
+                "slice:configured_dt": contract["model"]["dt"],
+                "slice:policy_proposal": "proposal_0",
+                "slice:executed_action": f"action_{executed}",
+                "slice:shield:setPoint": model_inputs["setPoint"],
+                "slice:shield:temperatureCelcius": model_inputs[
+                    "temperatureCelcius"
+                ],
+                "slice:shield:done": bool(model_inputs["done"]),
+                "slice:machine:ac:saved_mode": engine.current_sm_state[
+                    "system::ac"
+                ],
+                "slice:machine:heater:saved_mode": engine.current_sm_state[
+                    "system::heater"
+                ],
+                "slice:command:ac:on": False,
+                "slice:command:ac:reset": False,
+                "slice:command:heater:on": False,
+                "slice:command:heater:reset": False,
+            }
+            for name in contract["required_properties"]:
+                slug = name.replace(" ", "_").lower()
+                synthetic[f"slice:property:{slug}:status"] = "property_true"
+                synthetic[f"slice:property:{slug}:error"] = "no_error"
+
+            values = {}
+            for uid, identity in storage.items():
+                if uid.startswith("graph:"):
+                    value = resolve_value(state, uid.removeprefix("graph:"))
+                    # The source leaves policy-call outputs uninitialized at
+                    # reset.  They are overwritten before any read, so either
+                    # typed Boolean representative is a faithful embedding.
+                    if value is None and identity.native_sort is NativeSort.BOOL:
+                        value = False
+                    values[uid] = value
+                elif uid in semantic:
+                    values[uid] = semantic[uid]
+                elif uid in synthetic:
+                    values[uid] = synthetic[uid]
+                else:
+                    raise AssertionError(f"reset witness lacks {uid}")
+            return executed, values
+
+        transitions = tuple(
+            step.transition for step in window.steps
+        ) + (candidate_transition,)
+        assertions = []
+        for index, transition in enumerate(transitions):
+            executed, values = snapshot()
+            boundary = dict(transition.boundary_entry_terms)
+            if set(boundary) != set(values):
+                raise AssertionError("reset witness boundary coverage mismatch")
+            assertions.extend(
+                f"(= {boundary[uid]} {term(uid, values[uid])})"
+                for uid in sorted(boundary)
+            )
+            if index + 1 < len(transitions):
+                _observation, _reward, done, info = env.step(executed)
+                if done:
+                    raise AssertionError(
+                        "concrete nonvacuity witness terminated before window end: "
+                        + str(info["outcome"])
+                    )
+        return tuple(assertions)
+    finally:
+        env.close()
 
 
 class HistoryWindowTests(unittest.TestCase):
@@ -233,11 +406,24 @@ class HistoryWindowTests(unittest.TestCase):
         self.assertEqual(left.count("declare-const"), base.count("declare-const"))
         self.assertEqual(right.count("declare-const"), base.count("declare-const"))
 
+    def test_concrete_sat_witness_covers_every_decision_boundary(self):
+        for name, window in self.windows.items():
+            with self.subTest(case=name):
+                witness = _reset_trace_witness_assertions(
+                    window, self.slice, self.transition,
+                )
+                self.assertEqual(len(witness), 47 * window.transition_copy_count)
+
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
     def test_each_overapproximating_history_case_is_nonvacuously_satisfiable(self):
         for name, window in self.windows.items():
             with self.subTest(case=name):
-                result = run_smt2_query(window.smt2(), timeout_ms=120_000)
+                witness = _reset_trace_witness_assertions(
+                    window, self.slice, self.transition,
+                )
+                result = run_smt2_query(
+                    window.smt2(*witness), timeout_ms=120_000
+                )
                 self.assertIs(result.status, SolverStatus.SAT, result.reason)
 
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
