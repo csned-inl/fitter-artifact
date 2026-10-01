@@ -13,6 +13,7 @@ case.  ``SAT``, ``UNKNOWN``, timeout, and solver errors are never proofs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import re
 
 from .markov_interval import FiniteDecisionInterval
@@ -20,8 +21,9 @@ from .markov_ir import MarkovIR, NativeSort
 from .markov_slice import TheoremSlice
 from .markov_z3 import UnsupportedLoweringError
 from .markov_z3_history import BufferSlotEncoding, compile_buffer_history
+from .markov_z3_event import enum_constructor
 from .markov_z3_interface import VisibleTermEncoding, compile_thermostat_interface
-from .markov_z3_expr import quoted_symbol
+from .markov_z3_expr import fp_literal, quoted_symbol
 from .markov_z3_transition import compile_transition_relation
 from .markov_z3_window import HistoryWindowEncoding, compile_history_window
 
@@ -159,14 +161,29 @@ class TargetOverapproximationEncoding:
     def omitted_assertion_count(self) -> int:
         return self.source_assertion_count - len(self.premise_assertions)
 
-    def smt2(self) -> str:
+    def smt2(self, *witness_assertions: str) -> str:
         return "\n".join((
             *self.sort_declarations,
             *self.declarations,
             *self.definitions,
-            *(f"(assert {formula})" for formula in self.premise_assertions),
+            *(f"(assert {formula})" for formula in (
+                *self.premise_assertions,
+                *witness_assertions,
+            )),
             f"(assert {self.difference_assertion})",
         )) + "\n"
+
+
+@dataclass(frozen=True)
+class ExecutedActionAliasWitness:
+    """One exact-bit candidate; SAT is meaningful only after full replay."""
+
+    assertions: tuple[str, ...]
+    set_point: str
+    tolerance: str
+    left_temperature: str
+    right_temperature: str
+    normalized_temperature_bits: str
 
 
 @dataclass(frozen=True)
@@ -256,6 +273,19 @@ class ThermostatPairedQueryEncoding:
         """Return the auditable monolithic counterexample formula."""
 
         return self._smt2(extra_assertions=(self.counterexample_assertion,))
+
+    def target_smt2(self, name: str, *witness_assertions: str) -> str:
+        """Return the full base with exactly one selected difference target."""
+
+        matches = tuple(item for item in self.differences if item.name == name)
+        if len(matches) != 1:
+            raise UnsupportedLoweringError(
+                "paired target is missing or duplicated: " + name
+            )
+        return self._smt2(extra_assertions=(
+            *witness_assertions,
+            matches[0].assertion,
+        ))
 
 
 def _compile_side(
@@ -644,10 +674,150 @@ def compile_executed_action_overapproximation(
     return encoding
 
 
+def compile_executed_action_alias_witness(
+    query: ThermostatPairedQueryEncoding,
+) -> ExecutedActionAliasWitness:
+    """Pin the one-ULP Float64 alias that the symbolic search failed to find.
+
+    The witness does not strengthen a proof query.  It is used first to check
+    the reduced cone and then, unchanged, to replay the candidate against the
+    complete paired base.  Only SAT from that complete replay establishes a
+    counterexample.
+    """
+
+    compile_executed_action_overapproximation(query)
+    if query.history_case != "reset_prefix_0" \
+            or query.left.steps or query.right.steps:
+        raise UnsupportedLoweringError(
+            "executed-action alias replay is restricted to reset_prefix_0"
+        )
+
+    set_point_value = 22.0
+    tolerance_value = 1.0
+    left_temperature_value = 21.0
+    right_temperature_value = math.nextafter(
+        left_temperature_value, math.inf,
+    )
+    values = {
+        "set_point": fp_literal(set_point_value, NativeSort.FLOAT64),
+        "tolerance": fp_literal(tolerance_value, NativeSort.FLOAT64),
+        "left_temperature": fp_literal(
+            left_temperature_value, NativeSort.FLOAT64,
+        ),
+        "right_temperature": fp_literal(
+            right_temperature_value, NativeSort.FLOAT64,
+        ),
+        "normalized_set_point": fp_literal(
+            0.9205322861671448, NativeSort.FLOAT32,
+        ),
+        "normalized_temperature": fp_literal(
+            0.8786898851394653, NativeSort.FLOAT32,
+        ),
+    }
+    expected_literals = {
+        "set_point": "#x4036000000000000",
+        "tolerance": "#x3ff0000000000000",
+        "left_temperature": "#x4035000000000000",
+        "right_temperature": "#x4035000000000001",
+        "normalized_set_point": "#x3f6ba801",
+        "normalized_temperature": "#x3f60f1d2",
+    }
+    if any(bits not in values[name]
+           for name, bits in expected_literals.items()):
+        raise UnsupportedLoweringError(
+            "host floating-point literals do not match the checked witness"
+        )
+
+    assertions: list[str] = []
+    for side_name, temperature, cold, action_name in (
+        ("left", values["left_temperature"], "true", "action_1"),
+        ("right", values["right_temperature"], "false", "action_0"),
+    ):
+        prefix = query.namespace + "::" + side_name
+        transition = prefix + "::transition"
+        interface = prefix + "::interface"
+        buffer = prefix + "::buffer"
+        terms = {
+            "set_point": quoted_symbol(
+                transition, "boundary-entry", "slice:shield:setPoint",
+            ),
+            "temperature": quoted_symbol(
+                transition, "boundary-entry",
+                "slice:shield:temperatureCelcius",
+            ),
+            "tolerance": quoted_symbol(
+                transition, "boundary-entry", "semantic:tolerance",
+            ),
+            "action": quoted_symbol(
+                transition, "boundary-entry", "slice:executed_action",
+            ),
+            "proposal": quoted_symbol(
+                transition, "boundary-entry", "slice:policy_proposal",
+            ),
+            "cold": quoted_symbol(interface, "definition", "shield-cold"),
+            "hot": quoted_symbol(interface, "definition", "shield-hot"),
+            "error": quoted_symbol(interface, "definition", "shield-error"),
+            "required": quoted_symbol(
+                interface, "definition", "required-action",
+            ),
+            "normalized_set_point": quoted_symbol(
+                buffer, "definition", "current-observation", "setPoint",
+            ),
+            "normalized_temperature": quoted_symbol(
+                buffer, "definition", "current-observation",
+                "temperatureCelcius",
+            ),
+        }
+        action = enum_constructor("ExecutedAction", action_name)
+        assertions.extend((
+            f"(= {terms['set_point']} {values['set_point']})",
+            f"(= {terms['temperature']} {temperature})",
+            f"(= {terms['tolerance']} {values['tolerance']})",
+            f"(= {terms['action']} {action})",
+            f"(= {terms['proposal']} "
+            f"{enum_constructor('PolicyProposal', 'proposal_0')})",
+            f"(= {terms['cold']} {cold})",
+            f"(= {terms['hot']} false)",
+            f"(= {terms['error']} false)",
+            f"(= {terms['required']} {action})",
+            f"(= {terms['normalized_set_point']} "
+            f"{values['normalized_set_point']})",
+            f"(= {terms['normalized_temperature']} "
+            f"{values['normalized_temperature']})",
+        ))
+
+    all_symbols = _symbols("\n".join((
+        *query.left.sort_declarations,
+        *query.right.sort_declarations,
+        *query.left.declarations,
+        *query.right.declarations,
+        *query.left.definitions,
+        *query.right.definitions,
+    )))
+    unresolved = _symbols("\n".join(assertions)) - all_symbols
+    if unresolved:
+        raise UnsupportedLoweringError(
+            "executed-action witness has unresolved symbols: "
+            + ", ".join(sorted(unresolved))
+        )
+    return ExecutedActionAliasWitness(
+        assertions=tuple(assertions),
+        set_point=values["set_point"],
+        tolerance=values["tolerance"],
+        left_temperature=values["left_temperature"],
+        right_temperature=values["right_temperature"],
+        normalized_temperature_bits=expected_literals[
+            "normalized_temperature"
+        ],
+    )
+
+
 __all__ = [
     "PairedDifferenceEncoding",
+    "ExecutedActionAliasWitness",
     "TargetOverapproximationEncoding",
     "ThermostatPairedQueryEncoding",
+    "compile_executed_action_alias_witness",
     "compile_executed_action_overapproximation",
     "compile_thermostat_paired_query",
 ]

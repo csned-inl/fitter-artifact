@@ -19,6 +19,7 @@ from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import SOLVER_PIPELINE, UnsupportedLoweringError
 from clarity.certification.markov_z3_pair import (
     _validate_alpha_copies,
+    compile_executed_action_alias_witness,
     compile_executed_action_overapproximation,
     compile_thermostat_paired_query,
 )
@@ -221,26 +222,80 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                 replace(query, differences=differences)
             )
 
+    def test_executed_action_alias_witness_uses_exact_checked_bits(self):
+        query = self.queries["reset_prefix_0"]
+        witness = compile_executed_action_alias_witness(query)
+        joined = "\n".join(witness.assertions)
+        self.assertEqual(len(witness.assertions), 22)
+        self.assertIn("#x4035000000000000", witness.left_temperature)
+        self.assertIn("#x4035000000000001", witness.right_temperature)
+        self.assertEqual(witness.normalized_temperature_bits, "#x3f60f1d2")
+        self.assertIn("action_1", joined)
+        self.assertIn("action_0", joined)
+        self.assertEqual(joined.count("#x3f60f1d2"), 2)
+        self.assertIn("executed_action", query.target_smt2(
+            "executed_action", *witness.assertions,
+        ))
+        with self.assertRaises(UnsupportedLoweringError):
+            compile_executed_action_alias_witness(
+                self.queries["steady_state"]
+            )
+
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
-    def test_z3_proves_executed_action_target(self):
+    def test_z3_replays_executed_action_alias_before_proof(self):
         import z3
 
-        for case, query in self.queries.items():
-            with self.subTest(case=case):
-                target = compile_executed_action_overapproximation(query)
-                expressions = z3.parse_smt2_string(target.smt2())
-                solver = z3.Then(*(
-                    z3.Tactic(name) for name in SOLVER_PIPELINE
-                )).solver()
-                solver.set(timeout=5_000)
-                solver.add(*list(expressions))
-                answer = solver.check()
-                self.assertEqual(
-                    answer, z3.unsat,
-                    f"{case}/executed_action: sound over-approximation was "
-                    f"{answer}, not a proof; reason={solver.reason_unknown()}; "
-                    f"candidate_retained={answer == z3.sat}",
-                )
+        query = self.queries["reset_prefix_0"]
+        target = compile_executed_action_overapproximation(query)
+        witness = compile_executed_action_alias_witness(query)
+
+        reduced_solver = z3.Then(*(
+            z3.Tactic(name) for name in SOLVER_PIPELINE
+        )).solver()
+        reduced_solver.set(timeout=5_000)
+        reduced_solver.add(*list(z3.parse_smt2_string(
+            target.smt2(*witness.assertions)
+        )))
+        reduced_answer = reduced_solver.check()
+        self.assertEqual(
+            reduced_answer, z3.sat,
+            "exact alias witness was not accepted by the reduced cone: "
+            f"{reduced_answer}; reason={reduced_solver.reason_unknown()}",
+        )
+
+        full_solver = z3.Then(*(
+            z3.Tactic(name) for name in SOLVER_PIPELINE
+        )).solver()
+        full_solver.set(timeout=30_000)
+        full_solver.add(*list(z3.parse_smt2_string(query.target_smt2(
+            "executed_action", *witness.assertions,
+        ))))
+        full_answer = full_solver.check()
+        if full_answer == z3.sat:
+            self.fail(
+                "confirmed full reset_prefix_0 executed_action counterexample: "
+                "Float64 temperatures #x4035000000000000 and "
+                "#x4035000000000001 both normalize to Float32 #x3f60f1d2 "
+                "but select action_1 and action_0"
+            )
+        if full_answer == z3.unknown:
+            self.fail(
+                "full reset_prefix_0 alias replay was inconclusive: "
+                + full_solver.reason_unknown()
+            )
+
+        unconstrained_solver = z3.Then(*(
+            z3.Tactic(name) for name in SOLVER_PIPELINE
+        )).solver()
+        unconstrained_solver.set(timeout=30_000)
+        unconstrained_solver.add(*list(z3.parse_smt2_string(target.smt2())))
+        answer = unconstrained_solver.check()
+        self.assertEqual(
+            answer, z3.unsat,
+            "the concrete alias was rejected by full replay, but the sound "
+            f"over-approximation still returned {answer}; "
+            f"reason={unconstrained_solver.reason_unknown()}",
+        )
 
 
 if __name__ == "__main__":
