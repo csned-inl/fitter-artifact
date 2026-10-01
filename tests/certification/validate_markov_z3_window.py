@@ -204,8 +204,8 @@ def _reset_trace_witness_assertions(
         env.close()
 
 
-def _named_window_query(window, witness: tuple[str, ...]) -> str:
-    """Render the same formula with every base-assertion family named."""
+def _diagnostic_labels(window, witness: tuple[str, ...]) -> tuple[str, ...]:
+    """Return one stable tracking label for every parsed assertion."""
 
     groups = (
         ("candidate_interface", window.candidate.interface.assertions),
@@ -216,19 +216,17 @@ def _named_window_query(window, witness: tuple[str, ...]) -> str:
             item.assertion for item in window.correspondences
         )),
     )
-    assertions = []
+    labels = []
     for group, formulas in groups:
-        assertions.extend(
-            f"(assert (! {formula} :named |base::{group}::{index}|))"
-            for index, formula in enumerate(formulas)
+        labels.extend(
+            f"base::{group}::{index}" for index, _formula in enumerate(formulas)
         )
-    assertions.extend(f"(assert {formula})" for formula in witness)
-    return "\n".join((
-        *window.sort_declarations,
-        *window.declarations,
-        *window.definitions,
-        *assertions,
-    )) + "\n"
+    for index, formula in enumerate(witness):
+        marker = ":named |"
+        if marker not in formula or not formula.endswith("|)"):
+            raise AssertionError(f"unnamed witness assertion at index {index}")
+        labels.append(formula.rsplit(marker, 1)[1][:-2])
+    return tuple(labels)
 
 
 def _window_unsat_core(window, witness: tuple[str, ...]) -> tuple[str, ...]:
@@ -236,12 +234,20 @@ def _window_unsat_core(window, witness: tuple[str, ...]) -> tuple[str, ...]:
 
     try:
         z3 = importlib.import_module("z3")
+        expressions = list(z3.parse_smt2_string(canonical_smt2(
+            window.smt2(*witness)
+        )))
+        labels = _diagnostic_labels(window, witness)
+        if len(expressions) != len(labels):
+            return (
+                f"diagnostic_error:assertion_count:{len(expressions)}:"
+                f"{len(labels)}",
+            )
         solver = z3.Solver()
         solver.set(timeout=120_000)
         solver.set(unsat_core=True)
-        solver.from_string(canonical_smt2(
-            _named_window_query(window, witness)
-        ))
+        for expression, label in zip(expressions, labels):
+            solver.assert_and_track(expression, z3.Bool(label))
         answer = solver.check()
         if answer != z3.unsat:
             return (
@@ -465,22 +471,24 @@ class HistoryWindowTests(unittest.TestCase):
                 )
                 self.assertEqual(len(witness), 47 * window.transition_copy_count)
 
-    def test_unsat_diagnostic_names_every_base_and_witness_assertion(self):
+    def test_unsat_diagnostic_labels_every_base_and_witness_assertion(self):
         window = self.windows["reset_prefix_1"]
         witness = _reset_trace_witness_assertions(
             window, self.slice, self.transition,
         )
-        query = _named_window_query(window, witness)
+        labels = _diagnostic_labels(window, witness)
         self.assertEqual(
-            query.count("(assert "), len(window.assertions) + len(witness)
+            len(labels), len(window.assertions) + len(witness)
         )
         for group in (
             "candidate_interface", "history_padding", "historical_steps",
             "state_bridges", "buffer_correspondence",
         ):
-            self.assertIn(f"|base::{group}::", query)
-        self.assertIn("|witness::0::", query)
-        self.assertIn("|witness::1::", query)
+            self.assertTrue(any(
+                label.startswith(f"base::{group}::") for label in labels
+            ))
+        self.assertTrue(any(label.startswith("witness::0::") for label in labels))
+        self.assertTrue(any(label.startswith("witness::1::") for label in labels))
 
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
     def test_each_overapproximating_history_case_is_nonvacuously_satisfiable(self):
