@@ -20,7 +20,8 @@ from clarity.certification.markov_contract import (
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
 from clarity.certification.markov_z3 import (
-    SolverStatus, UnsupportedLoweringError, run_smt2_query,
+    SOLVER_PIPELINE, SolverStatus, UnsupportedLoweringError, canonical_smt2,
+    run_smt2_query,
 )
 from clarity.certification.markov_ir import NativeSort
 from clarity.certification.markov_native_semantics import thermostat_shield_action
@@ -188,7 +189,8 @@ def _reset_trace_witness_assertions(
             if set(boundary) != set(values):
                 raise AssertionError("reset witness boundary coverage mismatch")
             assertions.extend(
-                f"(= {boundary[uid]} {term(uid, values[uid])})"
+                f"(! (= {boundary[uid]} {term(uid, values[uid])}) "
+                f":named |witness::{index}::{uid}|)"
                 for uid in sorted(boundary)
             )
             if index + 1 < len(transitions):
@@ -201,6 +203,29 @@ def _reset_trace_witness_assertions(
         return tuple(assertions)
     finally:
         env.close()
+
+
+def _witness_unsat_core(query: str) -> tuple[str, ...]:
+    """Return named witness cells from a failed concrete SAT fixture."""
+
+    try:
+        z3 = importlib.import_module("z3")
+        solver = z3.Then(
+            *(z3.Tactic(name) for name in SOLVER_PIPELINE)
+        ).solver()
+        solver.set(timeout=120_000)
+        solver.set(unsat_core=True)
+        solver.from_string(canonical_smt2(query))
+        answer = solver.check()
+        if answer != z3.unsat:
+            return (
+                "diagnostic_status:"
+                + ("unknown:" + solver.reason_unknown()
+                   if answer == z3.unknown else str(answer)),
+            )
+        return tuple(sorted(str(item) for item in solver.unsat_core()))
+    except Exception as exc:
+        return (f"diagnostic_error:{type(exc).__name__}:{exc}",)
 
 
 class HistoryWindowTests(unittest.TestCase):
@@ -421,10 +446,15 @@ class HistoryWindowTests(unittest.TestCase):
                 witness = _reset_trace_witness_assertions(
                     window, self.slice, self.transition,
                 )
-                result = run_smt2_query(
-                    window.smt2(*witness), timeout_ms=120_000
-                )
-                self.assertIs(result.status, SolverStatus.SAT, result.reason)
+                query = window.smt2(*witness)
+                result = run_smt2_query(query, timeout_ms=120_000)
+                reason = result.reason
+                if result.status is SolverStatus.UNSAT:
+                    reason = (
+                        "concrete witness UNSAT; named witness core="
+                        + repr(_witness_unsat_core(query))
+                    )
+                self.assertIs(result.status, SolverStatus.SAT, reason)
 
     @unittest.skipUnless(HAS_Z3, "Z3 bindings are unavailable in this environment")
     def test_z3_rejects_a_buffer_correspondence_violation(self):
