@@ -74,6 +74,7 @@ class BufferHistoryEncoding:
     namespace: str
     b_obs: int
     b_act: int
+    observation_scale: float
     interface: ThermostatInterfaceEncoding
     declarations: tuple[str, ...]
     definitions: tuple[str, ...]
@@ -405,6 +406,7 @@ def compile_buffer_history(
         namespace=namespace,
         b_obs=b_obs,
         b_act=b_act,
+        observation_scale=scale,
         interface=interface,
         declarations=tuple(declarations),
         definitions=tuple(definitions),

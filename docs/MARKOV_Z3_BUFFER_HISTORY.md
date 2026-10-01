@@ -49,9 +49,11 @@ positive Float32 zero. For `b_obs=2, b_act=1`:
 | `reset_prefix_1` | 2 scalar positions at observation lag 2 |
 | `steady_state` | 0 |
 
-These are only the padding constraints for the cases. Populated entries will
-later be connected to the finite predecessor chain. Calling this component a
-complete reset-reachability proof would be unsound.
+These are only the padding constraints for the cases. The separate linear
+finite-history-window component now connects populated entries to historical
+observations and executed actions. Calling either component a complete
+reset-reachability proof would still be unsound because an exact source-reset
+anchor has not yet been encoded.
 
 ## Anti-redundancy boundary
 
@@ -81,7 +83,9 @@ ways that could weaken the theorem, including:
 
 The production `ObligationManifest` is deliberately unchanged. Its structural
 shift obligations remain `NOT_RUN`, and `certificate_ready` remains false.
-Before those statuses can change, the implementation still needs the exact
-finite predecessor chains for every reset/steady case, paired same-buffer
-runs, reachability/invariant inclusion, progress checks, and exhaustive
-visible-difference queries.
+The linear predecessor-window component now supplies exact continuing
+transitions, full typed-state bridges, and final-buffer lag correspondence. It
+starts from the full type-correct state domain, so the implementation still
+needs an exact reset anchor, paired same-buffer runs, reachability/invariant
+inclusion, progress checks, and exhaustive visible-difference queries before
+those statuses can change.

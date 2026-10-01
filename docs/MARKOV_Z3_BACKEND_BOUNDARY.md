@@ -27,11 +27,12 @@ thermostat theorem.
 Production `ObligationManifest` lowering still raises
 `UnsupportedLoweringError`. The native operation table, sparse
 controller-visible shield/reward/outcome interface, and exact buffer
-layout/reset-padding/one-step-shift view are now checked. The buffer view is
-not yet a complete history or reachability encoding. The production boundary
-remains closed until finite predecessor chains, paired-run,
-reachability/invariant, progress-query, and visible-difference lowering are
-also checked.
+layout/reset-padding/one-step-shift view are now checked. Linear predecessor
+windows now attach exact continuing transitions and lag correspondence under
+the conservative `I = true` initial-state domain. This is not exact reset
+reachability. The production boundary remains closed until the source-reset
+anchor, paired-run, reachability/invariant, progress-query, and
+visible-difference lowering are also checked.
 Consequently, the workstation gate may report `z3_fixture_status: passed` while
 it must still report `certificate_claimed: false` and a not-run production
 proof status.

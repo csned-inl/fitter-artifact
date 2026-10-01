@@ -61,8 +61,10 @@ fails closed.
 
 This is the standing redundancy policy in concrete form: share pure exact
 terms and avoid repeated transport, but do not delete semantic behaviors. The
-separately documented sparse finite-buffer view now checks the exact layout,
-reset padding, and one-step shift without copying this transition. The
-production `ObligationManifest` boundary remains closed until complete finite
-predecessor chains, paired-run, reachability/invariant, progress, and
-exhaustive difference relations are implemented and checked.
+separately documented sparse finite-buffer view checks the exact layout,
+reset padding, and one-step shift without copying this transition. Linear
+predecessor windows reuse one transition per historical decision under a
+conservative type-domain initial state. The production `ObligationManifest`
+boundary remains closed until the exact reset anchor, paired-run,
+reachability/invariant, progress, and exhaustive difference relations are
+implemented and checked.
