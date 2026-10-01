@@ -87,6 +87,32 @@ def _validate_slot_pair(
         )
 
 
+def _validate_alpha_copies(
+    left: HistoryWindowEncoding,
+    right: HistoryWindowEncoding,
+    *,
+    left_prefix: str,
+    right_prefix: str,
+) -> None:
+    """Require the paired bases to differ only by their side namespace."""
+
+    def rename(items: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(item.replace(left_prefix, right_prefix) for item in items)
+
+    if left.sort_declarations != right.sort_declarations \
+            or rename(left.declarations) != right.declarations \
+            or rename(left.definitions) != right.definitions \
+            or rename(left.assertions) != right.assertions \
+            or left.history_case.name != right.history_case.name \
+            or left.history_case.kind != right.history_case.kind \
+            or left.history_case.decision_count != right.history_case.decision_count \
+            or left.carried_state_uids != right.carried_state_uids \
+            or left.reinitialized_uids != right.reinitialized_uids:
+        raise UnsupportedLoweringError(
+            "paired bases are not exact namespace-renamed copies"
+        )
+
+
 @dataclass(frozen=True)
 class PairedDifferenceEncoding:
     name: str
@@ -222,6 +248,12 @@ def compile_thermostat_paired_query(
     right = _compile_side(
         slice_, ir, interval, history_case=history_case,
         namespace=namespace + "::right",
+    )
+    _validate_alpha_copies(
+        left,
+        right,
+        left_prefix=namespace + "::left",
+        right_prefix=namespace + "::right",
     )
 
     left_slots = left.candidate.current_slots

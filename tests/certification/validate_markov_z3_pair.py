@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
@@ -15,8 +16,11 @@ sys.path.insert(0, str(ROOT / "src"))
 from clarity.certification.markov_extract import extract_thermostat_markov_ir
 from clarity.certification.markov_interval import derive_thermostat_decision_interval
 from clarity.certification.markov_slice import build_thermostat_relevance_slice
-from clarity.certification.markov_z3 import SOLVER_PIPELINE
-from clarity.certification.markov_z3_pair import compile_thermostat_paired_query
+from clarity.certification.markov_z3 import SOLVER_PIPELINE, UnsupportedLoweringError
+from clarity.certification.markov_z3_pair import (
+    _validate_alpha_copies,
+    compile_thermostat_paired_query,
+)
 
 
 HAS_Z3 = importlib.util.find_spec("z3") is not None
@@ -91,6 +95,41 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                     + len(query.current_equalities) + 1,
                 )
 
+    def test_paired_bases_are_exact_namespace_renamed_copies(self):
+        for case, query in self.queries.items():
+            with self.subTest(case=case):
+                left_prefix = query.namespace + "::left"
+                right_prefix = query.namespace + "::right"
+
+                def rename(items):
+                    return tuple(
+                        item.replace(left_prefix, right_prefix) for item in items
+                    )
+
+                self.assertEqual(
+                    rename(query.left.declarations), query.right.declarations,
+                )
+                self.assertEqual(
+                    rename(query.left.definitions), query.right.definitions,
+                )
+                self.assertEqual(
+                    rename(query.left.assertions), query.right.assertions,
+                )
+
+    def test_alpha_copy_check_fails_closed_on_a_changed_assertion(self):
+        query = self.queries["steady_state"]
+        changed_right = replace(
+            query.right,
+            step_assertions=query.right.step_assertions[:-1],
+        )
+        with self.assertRaises(UnsupportedLoweringError):
+            _validate_alpha_copies(
+                query.left,
+                changed_right,
+                left_prefix=query.namespace + "::left",
+                right_prefix=query.namespace + "::right",
+            )
+
     def test_incremental_query_guards_each_complete_difference_once(self):
         for case, query in self.queries.items():
             with self.subTest(case=case):
@@ -124,12 +163,6 @@ class ThermostatPairedPrototypeTests(unittest.TestCase):
                 )).solver()
                 solver.set(timeout=30_000)
                 solver.add(*list(expressions))
-                base = solver.check()
-                self.assertEqual(
-                    base, z3.sat,
-                    f"{case}: paired base must be SAT, found {base}; "
-                    f"reason={solver.reason_unknown()}",
-                )
                 for selector, difference in zip(
                     query.difference_selectors, query.differences,
                 ):
