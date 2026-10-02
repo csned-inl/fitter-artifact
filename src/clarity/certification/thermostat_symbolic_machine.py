@@ -470,6 +470,19 @@ def _validate_source(parser: SysMLParser) -> None:
         == "system::environment::temperatureCelcius",
         "unsupported environment-to-sensor binding",
     )
+    sensor_step = next((action for action in parser.part_defs["TemperatureSensor"].actions
+                        if action.name == "step"), None)
+    _require(sensor_step is not None, "missing sensor step")
+    sensor_assignments = {
+        tuple(item.target): _expr_key(item.expr) for item in sensor_step.body
+        if hasattr(item, "target") and hasattr(item, "expr")
+    }
+    _require(sensor_assignments == {
+        ("temperatureReading", "temperatureCelcius"):
+            ("ref", ("environmentPort", "reading", "temperatureCelcius")),
+        ("lastReadingCelcius",): ("ref", ("temperatureReading", "temperatureCelcius")),
+    } and any(getattr(item, "port", None) == "upstreamPort" for item in sensor_step.body),
+             "unsupported sensor transfer")
     _require({(flow.from_port, flow.to_port) for flow in parser.flows} == {
         ("ac.heatOut", "environment.acPort"),
         ("heater.heatOut", "environment.heaterPort"),

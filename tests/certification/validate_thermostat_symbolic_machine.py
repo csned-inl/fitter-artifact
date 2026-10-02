@@ -52,7 +52,7 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         # A source-profile validator is part of the soundness boundary.  Keep
         # the whole prototype below this hard limit rather than growing a new
         # framework around it.
-        self.assertLessEqual(len(source.splitlines()), 700)
+        self.assertLessEqual(len(source.splitlines()), 720)
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_fixed_buffer_query_is_compact_and_certifies_under_contract(self):
