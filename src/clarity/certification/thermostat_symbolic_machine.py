@@ -46,7 +46,7 @@ CONTRACT_ASSUMPTIONS = (
     "setpoint is reset-selectable state and is observed exactly",
     "reset sets temperature to 23.9, time to zero, actuator flags/outputs off, and history to zero",
     "one step observes setpoint/temperature and tests completion before any action",
-    "on Continue the executed action equals the source-required action; a different proposal is replaced",
+    "on Continue SpecShield keeps a live requirement-satisfying proposal and otherwise replaces it",
     "actuator state/output updates atomically with no queue, delay, error, or unmatched-command effect",
     "the exact thermal and clock equations run once, then the observation buffer shifts",
     "Stop returns only reward 1; Continue returns reward -0.01 and the next buffer",
@@ -159,6 +159,10 @@ class ThermostatRelation:
     initial: Any
     enabled: Any
     completion: Any
+    required_action: Any
+    proposal_is_dead: Any
+    proposal_satisfies_requirement: Any
+    shield_replaced_proposal: Any
     executed_action: Any
     outcome_tag: Any
     observation: tuple[Any, Any]
@@ -179,7 +183,7 @@ class ThermostatRelation:
             "source_sha256": self.source_sha256,
             "observation": ("setpoint", "temperature"),
             "proposed_action": "integer in {0, 1, 2, 3}",
-            "executed_action": "query-supplied replacement rule checked against the source requirement",
+            "executed_action": "SpecShield keep-valid-otherwise-replace decision",
             "result_schema": RESULT_SCHEMA,
             "properties": tuple((item.name, item.role) for item in self.properties),
             "assumptions": self.assumptions,
@@ -363,7 +367,17 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
     heater_required = current.setpoint >= current.temperature + tolerance
     ac_required = current.setpoint <= current.temperature - tolerance
     required_action = z3.If(heater_required, 1, 0) + z3.If(ac_required, 2, 0)
-    executed = z3.If(proposed == required_action, proposed, required_action)
+    proposal_heater = _action_has_heater(z3, proposed)
+    proposal_ac = _action_has_ac(z3, proposed)
+    proposal_is_dead = proposed == 3
+    proposal_satisfies = z3.And(
+        z3.Not(proposal_is_dead),
+        proposal_heater == heater_required,
+        proposal_ac == ac_required,
+        z3.Not(z3.And(proposal_heater, proposal_ac)),
+    )
+    shield_replaced = z3.Or(proposal_is_dead, z3.Not(proposal_satisfies))
+    executed = z3.If(shield_replaced, required_action, proposed)
     completion = z3.And(
         current.setpoint <= current.temperature + tolerance,
         current.setpoint >= current.temperature - tolerance,
@@ -427,6 +441,10 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         initial=initial,
         enabled=enabled,
         completion=completion,
+        required_action=required_action,
+        proposal_is_dead=proposal_is_dead,
+        proposal_satisfies_requirement=proposal_satisfies,
+        shield_replaced_proposal=shield_replaced,
         executed_action=executed,
         outcome_tag=z3.If(completion, 0, 1),
         observation=(current.setpoint, current.temperature),

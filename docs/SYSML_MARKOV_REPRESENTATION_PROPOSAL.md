@@ -18,8 +18,11 @@ contract-assumption tuple, and represents `Stop`/`Continue` plus the successor
 buffer as direct Z3 expressions. It does not introduce a general machine type
 or separate totality solver. The current conditional profile fixes outside
 temperature for the entire MDP instance including resets, and treats the
-proposal-to-executed replacement rule as query-supplied behavior rather than
-behavior synthesized from the neural requirement.
+proposal-to-executed rule as the explicit `SpecShield.__call__` boundary:
+structurally dead proposals are replaced; a live proposal satisfying the full
+neural requirement is retained; every other proposal is replaced by the unique
+requirement action. These branches remain explicit even though they collapse
+to the unique requirement action for this thermostat.
 
 ## 1. Representation problem and exact scope
 

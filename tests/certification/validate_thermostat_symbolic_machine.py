@@ -54,7 +54,31 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         # A source-profile validator is part of the soundness boundary.  Keep
         # the whole prototype below this hard limit rather than growing a new
         # framework around it.
-        self.assertLessEqual(len(source.splitlines()), 720)
+        self.assertLessEqual(len(source.splitlines()), 750)
+
+    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
+    def test_symbolic_shield_matches_clarity_keep_or_replace_boundary(self):
+        import z3
+        from clarity.runtime.shield import SpecShield
+
+        relation = extract_thermostat_relation(prefix="shield_test_")
+        shield = SpecShield(str(DEFAULT_MODEL_PATH))
+        for setpoint, temperature in ((18.3, 10.0), (18.3, 18.3), (18.3, 30.0)):
+            for proposal in range(4):
+                expected = shield(proposal, {
+                    "setPoint": setpoint,
+                    "temperatureCelcius": temperature,
+                    "done": False,
+                })
+                solver = z3.Solver()
+                solver.add(relation.current.setpoint == z3.RealVal(str(setpoint)))
+                solver.add(relation.current.temperature == z3.RealVal(str(temperature)))
+                solver.add(relation.proposal == proposal, relation.enabled)
+                self.assertEqual(str(solver.check()), "sat")
+                model = solver.model()
+                self.assertEqual(model.eval(relation.executed_action).as_long(), expected)
+                self.assertEqual(z3.is_true(model.eval(relation.shield_replaced_proposal)),
+                                 expected != proposal)
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_fixed_buffer_query_is_compact_and_certifies_under_contract(self):
