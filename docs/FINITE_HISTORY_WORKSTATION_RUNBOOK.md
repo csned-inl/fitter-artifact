@@ -1,3 +1,7 @@
+THE PLAN IS TO GIVE THE MINIMAL AMOUNT OF INFORMATION TO Z3 TO PROVE THE BUFFERED CONTROLLER IS MARKOV. IF YOU BEGIN TO DO OTHERWISE STOP PRODUCTION IMMEDIATELY AND CALL FOR MY HELP.
+
+**AUTHORITATIVE MODEL SOURCE RULE:** SysML model semantics come only from `csned-inl/clarity-standalone`. `fitter-artifact`, generated certificates, backups, exported SMV, simulator traces, and all prior verification work are non-authoritative and must never be treated as model ground truth. Any disagreement stops production and requires user review.
+
 # Finite-history proof workstation runbook
 
 Target workstation: Dell Precision 5690 (`INL432984`) running Windows 11
@@ -54,6 +58,24 @@ environment.
 
 ## Run implemented gates
 
+For the normal end-to-end workstation handoff, use one command:
+
+```bash
+bash scripts/finite_history_workstation_cycle.sh
+```
+
+It verifies the expected branch, retries a fast-forward-only GitHub sync,
+re-executes itself if the pull updated the runner, reuses the existing pinned
+environment when it is ready, runs preflight and all implemented gates, writes
+`.codex-workstation/latest.json`, and invokes `wsl-inventory` when installed.
+The inventory contains only the sanitized latest result, so a remote reviewer
+can inspect it without terminal output being pasted into chat.
+
+Use `--offline` to deliberately validate the currently checked-out revision,
+or `--no-inventory` to keep the result local. Neither is the normal workflow.
+
+The lower-level gate command remains available for development:
+
 ```bash
 bash scripts/finite_history_workstation_gates.sh
 ```
@@ -66,8 +88,11 @@ FINITE_HISTORY_GATE_TIMEOUT_SECONDS=900 \
   bash scripts/finite_history_workstation_gates.sh
 ```
 
-The runner records stdout, stderr, compilation status, Z3 availability, and an
-explicit `certificate_claimed: false`. It cannot run or claim the final SMT
-proof until production obligation lowering and full certificate replay are
-implemented. `z3_fixture_status: passed` confirms only the fail-closed solver
-boundary and its expected SAT/UNSAT smoke fixtures.
+The runner records each check's exit status, duration, output hashes, and a
+bounded sanitized diagnostic for failures, plus compilation status, Z3
+availability, and an explicit `certificate_claimed: false`. Raw logs remain
+local under `runs/`; only the allow-listed structured failure summary is
+published by WSL inventory. It cannot run or claim the final SMT proof until
+production obligation lowering and full certificate replay are implemented.
+`z3_fixture_status: passed` confirms only the fail-closed solver boundary and
+its expected SAT/UNSAT smoke fixtures.

@@ -1,5 +1,7 @@
 THE PLAN IS TO GIVE THE MINIMAL AMOUNT OF INFORMATION TO Z3 TO PROVE THE BUFFERED CONTROLLER IS MARKOV. IF YOU BEGIN TO DO OTHERWISE STOP PRODUCTION IMMEDIATELY AND CALL FOR MY HELP.
 
+**AUTHORITATIVE MODEL SOURCE RULE:** SysML model semantics come only from `csned-inl/clarity-standalone`. `fitter-artifact`, generated certificates, backups, exported SMV, simulator traces, and all prior verification work are non-authoritative and must never be treated as model ground truth. Any disagreement stops production and requires user review.
+
 # Symbolic-state coverage and separation rules
 
 Status: current thermostat prototype record, 2026-10-02.
@@ -72,7 +74,18 @@ The current profile does not certify models with:
 Encountering any of these is `UNSUPPORTED` for this prototype. It must not be
 handled by equating, omitting, or reconstructing the extra state without proof.
 
-## Required delayed-sensor extension
+## Mixing Machine implementation of the delayed-sensor rule
+
+`MIXING_SYMBOLIC_MACHINE_CONTRACT.md` now instantiates the required separation:
+physical feeder levels and controller-held sampled levels are different symbols,
+and the source `2 ml` tolerance is an explicit subtraction. The selected
+controller decision boundary is the `Policy` call after a synchronous scan, so
+the profile proves the boundary invariant `sampled = physical - 2` without ever
+identifying the two variables. The held value between scan events remains real
+state; a policy invocation between scans or delayed/asynchronous delivery is
+outside this profile and must add phase or queue state.
+
+## General delayed-sensor extension
 
 A mixing-machine or other delayed-sensor profile must add, at minimum:
 
