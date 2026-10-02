@@ -2,7 +2,12 @@ THE PLAN IS TO GIVE THE MINIMAL AMOUNT OF INFORMATION TO Z3 TO PROVE THE BUFFERE
 
 # Architecture record: direct SysML-to-Markov certification
 
-Status: revised conceptual record after five adversarial reviews. This document authorizes no implementation. The current reset-witness plan remains the only binding implementation plan. Work on this architecture may not proceed in parallel with that plan. If the user selects this architecture for implementation, the user must first explicitly freeze, retire, or supersede the reset-witness plan and approve a new model-specific binding plan.
+Status: **active architecture record (2026-10-02).** The user selected this
+route and froze the reset-witness plan. The binding implementation scope is in
+`SYSML_MARKOV_REPRESENTATION_PROPOSAL.md`: one thermostat-specific
+solver-native relation object, one fixed-buffer paired query, and focused
+tests. This document does not authorize a generic compiler, simulator,
+certificate framework, or any expansion beyond that endpoint.
 
 ## 1. Governing correction
 
