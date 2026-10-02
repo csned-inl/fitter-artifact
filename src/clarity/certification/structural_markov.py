@@ -53,6 +53,7 @@ class StructuralMarkovCertificate:
     buffer: dict[str, int]
     observations: tuple[str, ...]
     actions: tuple[str, ...]
+    action_execution: str
     action_definitions: tuple[str, ...]
     fixed_context: tuple[str, ...]
     reconstruction_evidence: tuple[tuple[str, str, int, str], ...]
@@ -419,6 +420,8 @@ def _prove_true(model: OTMarkovModel, expr: Expr, context: str) -> bool:
 def _policy_is_total_function(
     model: OTMarkovModel,
 ) -> tuple[dict[str, Expr], tuple[str, ...]] | None:
+    if model.policy_requirement is None or model.policy_subject is None:
+        return None
     definitions = _extract_total_definitions(model)
     if definitions is None:
         return None
@@ -517,10 +520,16 @@ def try_prove_markov_structurally(
         return None
     if not _declared_scenario_is_witness(model):
         return None
-    policy = _policy_is_total_function(model)
-    if policy is None:
-        return None
-    definitions, policy_evidence = policy
+    if model.action_execution.mode == "identity":
+        definitions: dict[str, Expr] = {}
+        policy_evidence = (
+            "action execution is the identity relation from proposal to plant action",
+        )
+    else:
+        policy = _policy_is_total_function(model)
+        if policy is None:
+            return None
+        definitions, policy_evidence = policy
     if not _completion_uses_only_buffer_and_context(model):
         return None
     if not _transition_factors_through_buffer(model):
@@ -536,6 +545,7 @@ def try_prove_markov_structurally(
         buffer={"b_obs": model.candidate.b_obs, "b_act": model.candidate.b_act},
         observations=tuple(field.name for field in model.observation),
         actions=model.action_names,
+        action_execution=model.action_execution.mode,
         action_definitions=tuple(sorted(definitions)),
         fixed_context=model.scenario_parameters,
         reconstruction_evidence=tuple(

@@ -96,6 +96,8 @@ def _output_name(model: OTMarkovModel, expr: Expr) -> str | None:
 def _extract_definitions(model: OTMarkovModel) -> dict[str, Expr]:
     definitions: dict[str, Expr] = {}
     aliases: list[tuple[str, str]] = []
+    if model.policy_requirement is None:
+        return definitions
     for term in _conjuncts(model.policy_requirement):
         if not isinstance(term, BinaryExpr) or term.op != "==":
             continue
@@ -288,6 +290,7 @@ def analyze_controller_class(model_path: str | Path) -> ControllerClassReport:
     availability = (
         "proved_by_total_source_definitions"
         if uniqueness.startswith("at_most_one")
+        and model.policy_requirement is not None
         and all(_is_definition_term(model, term)
                 for term in _conjuncts(model.policy_requirement))
         else "requires_markov_shield_totality_obligation"

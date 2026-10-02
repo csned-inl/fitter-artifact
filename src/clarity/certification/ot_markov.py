@@ -66,6 +66,26 @@ class _FixedValue:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionExecutionRelation:
+    """How a controller proposal becomes the action executed by the plant."""
+
+    mode: str
+    proposal_names: tuple[str, ...]
+    executed_names: tuple[str, ...]
+    admissibility: Expr | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"identity", "keep_or_replace"}:
+            raise ValueError(f"unsupported action execution mode {self.mode}")
+        if self.proposal_names != self.executed_names:
+            raise ValueError("profile 0.1 requires proposal/executed action alignment")
+        if self.mode == "identity" and self.admissibility is not None:
+            raise ValueError("identity execution cannot carry shield admissibility")
+        if self.mode == "keep_or_replace" and self.admissibility is None:
+            raise ValueError("shield execution requires an admissibility relation")
+
+
+@dataclass(frozen=True, slots=True)
 class OTMarkovModel:
     model_path: str
     source_sha256: str
@@ -79,11 +99,17 @@ class OTMarkovModel:
     parser: Any
     dependency_model: Any
     controller_fqn: str
-    policy_subject: str
-    policy_requirement: Expr
+    policy_subject: str | None
+    action_execution: ActionExecutionRelation
     completion: Expr
     observation_paths: tuple[tuple[tuple[str, ...], str], ...]
     prior_action_latches: tuple[tuple[str, str], ...]
+
+    @property
+    def policy_requirement(self) -> Expr | None:
+        """Compatibility view of the optional shield admissibility relation."""
+
+        return self.action_execution.admissibility
 
     def summary(self) -> dict[str, object]:
         return {
@@ -92,6 +118,7 @@ class OTMarkovModel:
             "package": self.package_name,
             "observation": tuple(field.name for field in self.observation),
             "actions": self.action_names,
+            "action_execution": self.action_execution.mode,
             "fixed_context": self.scenario_parameters,
             "candidate": {
                 "b_obs": self.candidate.b_obs,
@@ -289,11 +316,11 @@ def _find_policy(parser: SysMLParser) -> tuple[Any, Any, Any, list[Any], int]:
         )
     neural_requirements = [item for item in definition.requirements
                            if "NeuralRequirement" in item[4]]
-    if len(neural_requirements) != 1:
+    if len(neural_requirements) > 1:
         raise UnsupportedOTProfile(
-            "UNSUPPORTED_PROFILE", "expected one #NeuralRequirement"
+            "UNSUPPORTED_PROFILE", "expected at most one #NeuralRequirement"
         )
-    requirement = neural_requirements[0]
+    requirement = neural_requirements[0] if neural_requirements else None
     return policy, calls[0][0], requirement, calls[0][1], calls[0][2]
 
 
@@ -529,7 +556,15 @@ def compile_ot_model(model_path: str | Path) -> OTMarkovModel:
 
     dependency_witness = _transition_witness(graph, reconstructed)
     candidate = derive_buffer_candidate(tuple(evidence))
-    requirement_ast = ExpressionParser(requirement[3]).parse()
+    requirement_ast = (
+        ExpressionParser(requirement[3]).parse() if requirement is not None else None
+    )
+    execution = ActionExecutionRelation(
+        mode="keep_or_replace" if requirement_ast is not None else "identity",
+        proposal_names=tuple(item.name for item in policy.out_params),
+        executed_names=tuple(item.name for item in policy.out_params),
+        admissibility=requirement_ast,
+    )
     return OTMarkovModel(
         model_path=str(selected),
         source_sha256=hashlib.sha256(selected.read_bytes()).hexdigest(),
@@ -543,8 +578,8 @@ def compile_ot_model(model_path: str | Path) -> OTMarkovModel:
         parser=parser,
         dependency_model=graph,
         controller_fqn=parser.controller_part,
-        policy_subject=requirement[1],
-        policy_requirement=requirement_ast,
+        policy_subject=requirement[1] if requirement is not None else None,
+        action_execution=execution,
         completion=completion,
         observation_paths=tuple(observation_paths),
         prior_action_latches=tuple(sorted(latch_map.items())),
@@ -665,6 +700,7 @@ def build_markov_query(model: OTMarkovModel) -> OTMarkovQuery:
     """Build the generic paired proof from one compiled source profile."""
 
     z3 = _z3()
+    shielded = model.action_execution.mode == "keep_or_replace"
     _parameters, types = _parameter_maps(model.parser)
     scenario = {
         key: _sort_value(z3, types.get(key, "Real"), "fixed::" + key.replace("::", ":"))
@@ -676,14 +712,22 @@ def build_markov_query(model: OTMarkovModel) -> OTMarkovQuery:
     right_obs = {field.name: _sort_value(z3, field.type_name, "right::obs::" + field.name)
                  for field in model.observation}
     proposal = {name: z3.Bool("proposal::" + name) for name in model.action_names}
-    safe_left = {name: z3.Bool("left::safe::" + name) for name in model.action_names}
-    safe_right = {name: z3.Bool("right::safe::" + name) for name in model.action_names}
+    safe_left = (
+        {name: z3.Bool("left::safe::" + name) for name in model.action_names}
+        if shielded else {}
+    )
+    safe_right = (
+        {name: z3.Bool("right::safe::" + name) for name in model.action_names}
+        if shielded else {}
+    )
     prior_left = ({name: z3.Bool("left::prior::" + name) for name in model.action_names}
                   if model.candidate.b_act else {})
     prior_right = ({name: z3.Bool("right::prior::" + name) for name in model.action_names}
                    if model.candidate.b_act else {})
 
     def valid(obs: dict[str, Any], action: dict[str, Any]) -> Any:
+        if model.policy_requirement is None:
+            return z3.BoolVal(True)
         return _lower(
             model, model.policy_requirement, observation=obs, action=action,
             prior_action={}, scenario=scenario, context=model.controller_fqn,
@@ -691,16 +735,22 @@ def build_markov_query(model: OTMarkovModel) -> OTMarkovQuery:
 
     valid_proposal_left = valid(left_obs, proposal)
     valid_proposal_right = valid(right_obs, proposal)
-    valid_safe_left = valid(left_obs, safe_left)
-    valid_safe_right = valid(right_obs, safe_right)
-    executed_left = {
-        name: z3.If(valid_proposal_left, proposal[name], safe_left[name])
-        for name in model.action_names
-    }
-    executed_right = {
-        name: z3.If(valid_proposal_right, proposal[name], safe_right[name])
-        for name in model.action_names
-    }
+    valid_safe_left = valid(left_obs, safe_left) if shielded else z3.BoolVal(True)
+    valid_safe_right = valid(right_obs, safe_right) if shielded else z3.BoolVal(True)
+    executed_left = (
+        {
+            name: z3.If(valid_proposal_left, proposal[name], safe_left[name])
+            for name in model.action_names
+        }
+        if shielded else dict(proposal)
+    )
+    executed_right = (
+        {
+            name: z3.If(valid_proposal_right, proposal[name], safe_right[name])
+            for name in model.action_names
+        }
+        if shielded else dict(proposal)
+    )
 
     observation_equal = z3.And(*(left_obs[name] == right_obs[name]
                                  for name in left_obs))
@@ -755,17 +805,21 @@ def build_markov_query(model: OTMarkovModel) -> OTMarkovQuery:
     initialization_empty = z3.Not(
         z3.Exists(all_scenario, domain) if all_scenario else domain
     )
-    total_action = {name: z3.Bool("total::" + name) for name in model.action_names}
-    shield_not_total = z3.And(
-        domain,
-        z3.Not(z3.Exists(list(total_action.values()), valid(left_obs, total_action))),
-    )
-    unique_a = {name: z3.Bool("unique_a::" + name) for name in model.action_names}
-    unique_b = {name: z3.Bool("unique_b::" + name) for name in model.action_names}
-    shield_not_unique = z3.And(
-        domain, valid(left_obs, unique_a), valid(left_obs, unique_b),
-        z3.Or(*(unique_a[name] != unique_b[name] for name in model.action_names)),
-    )
+    if shielded:
+        total_action = {name: z3.Bool("total::" + name) for name in model.action_names}
+        shield_not_total = z3.And(
+            domain,
+            z3.Not(z3.Exists(list(total_action.values()), valid(left_obs, total_action))),
+        )
+        unique_a = {name: z3.Bool("unique_a::" + name) for name in model.action_names}
+        unique_b = {name: z3.Bool("unique_b::" + name) for name in model.action_names}
+        shield_not_unique = z3.And(
+            domain, valid(left_obs, unique_a), valid(left_obs, unique_b),
+            z3.Or(*(unique_a[name] != unique_b[name] for name in model.action_names)),
+        )
+    else:
+        shield_not_total = z3.BoolVal(False)
+        shield_not_unique = z3.BoolVal(False)
     return OTMarkovQuery(
         model, initialization_empty, shield_not_total,
         shield_not_unique, counterexample,

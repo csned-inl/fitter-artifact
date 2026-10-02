@@ -31,6 +31,12 @@ EXPECTED = {
 }
 
 
+def _remove_neural_requirement(source: str) -> str:
+    start = source.index("        #NeuralRequirement requirement def")
+    end = source.index("\n\n        action step {", start)
+    return source[:start] + source[end + 2:]
+
+
 class StructuralMarkovTests(unittest.TestCase):
     def test_all_three_models_receive_positive_structural_certificates(self):
         for name, path in MODELS.items():
@@ -51,6 +57,26 @@ class StructuralMarkovTests(unittest.TestCase):
             for path in MODELS.values():
                 result = prove_markov_with_fallback(path)
                 self.assertEqual(result["classification"], "CERTIFIED_STRUCTURALLY")
+
+    def test_absent_shield_uses_identity_execution_relation(self):
+        source = _remove_neural_requirement(MODELS["thermostat"].read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "model.sysml"
+            path.write_text(source)
+            certificate = try_prove_markov_structurally(path)
+            self.assertIsNotNone(certificate)
+            assert certificate is not None
+            self.assertEqual(certificate.action_execution, "identity")
+            self.assertEqual(certificate.action_definitions, ())
+            with patch(
+                "clarity.certification.structural_markov.prove_markov",
+                side_effect=AssertionError("identity fast path must not execute Z3"),
+            ):
+                result = prove_markov_with_fallback(path)
+            self.assertEqual(result["classification"], "CERTIFIED_STRUCTURALLY")
+            self.assertEqual(
+                result["certificate"]["action_execution"], "identity"
+            )
 
     def test_negative_tolerance_is_not_unsoundly_certified(self):
         source = MODELS["thermostat"].read_text()
