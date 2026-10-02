@@ -7,6 +7,11 @@ THE PLAN IS TO GIVE THE MINIMAL AMOUNT OF INFORMATION TO Z3 TO PROVE THE BUFFERE
 This repository has two deliberately separate execution tiers. Neither tier
 changes the source-authority rule or authorizes simulator reconstruction.
 
+The design and personal-side setup contract for a GitHub-mediated runner loop
+are in `docs/PERSONAL_RUNNER_BRIDGE_HANDOFF.md`. That bridge keeps GitHub as the
+only rendezvous point between the work-side agent and personal compute; it does
+not connect personal hardware to the locked-down work laptop.
+
 ## GitHub-hosted certification
 
 `.github/workflows/markov-certification.yml` runs on pushes to the active
