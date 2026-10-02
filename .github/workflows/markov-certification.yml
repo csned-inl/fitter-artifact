@@ -1,0 +1,55 @@
+name: Markov Certification
+
+on:
+  push:
+    branches:
+      - codex/thermostat-symbolic-machine
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markov-certification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-certification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install pinned certification dependencies
+        run: python -m pip install --requirement requirements-ci.txt
+
+      - name: Verify pinned Z3
+        run: |
+          python - <<'PY'
+          import importlib.metadata
+          import z3
+
+          distribution = importlib.metadata.version("z3-solver")
+          assert distribution == "5.0.0.0", distribution
+          print("z3-solver distribution:", distribution)
+          print("Z3 engine:", z3.get_version_string())
+          PY
+
+      - name: Run structural fast-path tests
+        run: PYTHONPATH=src python tests/certification/validate_structural_markov.py -v
+
+      - name: Run controller-class analysis tests
+        run: PYTHONPATH=src python tests/certification/validate_controller_class_analysis.py -v
+
+      - name: Run direct Z3 pipeline tests
+        run: PYTHONPATH=src python tests/certification/validate_ot_markov_pipeline.py -v

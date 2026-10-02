@@ -1,0 +1,61 @@
+name: Markov Workstation Certification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: markov-workstation-certification
+  cancel-in-progress: false
+
+jobs:
+  workstation-certification:
+    runs-on: [self-hosted, linux, x64, clarity-workstation, gpu]
+    timeout-minutes: 60
+    env:
+      PYTHON_BIN: ${{ runner.temp }}/clarity-venv/bin/python
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record workstation hardware
+        run: |
+          uname -a
+          lscpu
+          free -h
+          nvidia-smi
+
+      - name: Create isolated certification environment
+        run: |
+          python -m venv "${{ runner.temp }}/clarity-venv"
+          "$PYTHON_BIN" -m pip install --upgrade pip
+          "$PYTHON_BIN" -m pip install --requirement requirements-ci.txt
+
+      - name: Verify pinned Z3
+        run: |
+          "$PYTHON_BIN" - <<'PY'
+          import importlib.metadata
+          import z3
+
+          distribution = importlib.metadata.version("z3-solver")
+          assert distribution == "5.0.0.0", distribution
+          print("z3-solver distribution:", distribution)
+          print("Z3 engine:", z3.get_version_string())
+          PY
+
+      - name: Run structural fast-path tests
+        run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_structural_markov.py -v
+
+      - name: Run controller-class analysis tests
+        run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_controller_class_analysis.py -v
+
+      - name: Run direct Z3 pipeline tests
+        run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_ot_markov_pipeline.py -v

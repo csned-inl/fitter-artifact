@@ -35,6 +35,12 @@ EXPECTED = {
 HAS_Z3 = importlib.util.find_spec("z3") is not None
 
 
+def _remove_neural_requirement(source: str) -> str:
+    start = source.index("        #NeuralRequirement requirement def")
+    end = source.index("\n\n        action step {", start)
+    return source[:start] + source[end + 2:]
+
+
 class OTMarkovPipelineTests(unittest.TestCase):
     def test_one_compiler_derives_all_three_candidates(self):
         for name, path in MODELS.items():
@@ -96,6 +102,19 @@ class OTMarkovPipelineTests(unittest.TestCase):
                 self.assertTrue(all(
                     value == "unsat" for value in result["obligations"].values()
                 ))
+
+    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
+    def test_z3_backend_certifies_identity_execution_without_shield(self):
+        source = _remove_neural_requirement(MODELS["thermostat"].read_text())
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "model.sysml"
+            path.write_text(source)
+            result = prove_markov(path)
+        self.assertEqual(result["classification"], "CERTIFIED_UNDER_PROFILE", result)
+        self.assertEqual(result["model"]["action_execution"], "identity")
+        self.assertTrue(all(
+            value == "unsat" for value in result["obligations"].values()
+        ))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,2 @@
+# Dependencies required by GitHub-hosted and self-hosted certification jobs.
+z3-solver==5.0.0.0
