@@ -24,6 +24,11 @@ neural requirement is retained; every other proposal is replaced by the unique
 requirement action. These branches remain explicit even though they collapse
 to the unique requirement action for this thermostat.
 
+`SYSML_SYMBOLIC_STATE_COVERAGE.md` is the binding coverage record for physical,
+sensor, controller-visible, and actuator state. In particular, physical and
+sensor values must remain distinct symbols even when a model-specific invariant
+proves them equal at the selected decision epoch.
+
 ## 1. Representation problem and exact scope
 
 The mathematical specification in the SysML model is the primitive. The required representation must preserve the thermostat model's equations, inequalities, finite state, decision boundary, and query-relevant property roles without compiling or symbolically replaying a simulator.

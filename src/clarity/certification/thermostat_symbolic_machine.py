@@ -44,11 +44,12 @@ CONTRACT_ASSUMPTIONS = (
     "dt is the exact real value 1/10",
     "outside temperature is fixed for one MDP instance, including every reset",
     "setpoint is reset-selectable state and is observed exactly",
-    "reset sets temperature to 23.9, time to zero, actuator flags/outputs off, and history to zero",
-    "one step observes setpoint/temperature and tests completion before any action",
+    "reset sets physical and sensor temperature to 23.9, time to zero, actuator flags/outputs off, and history to zero",
+    "physical and sensor temperature are distinct state fields constrained equal only by this synchronous profile",
+    "one step observes setpoint/sensor temperature and tests completion before any action",
     "on Continue SpecShield keeps a live requirement-satisfying proposal and otherwise replaces it",
     "actuator state/output updates atomically with no queue, delay, error, or unmatched-command effect",
-    "the exact thermal and clock equations run once, then the observation buffer shifts",
+    "the exact thermal and clock equations run once, the sensor samples physical temperature, then the buffer shifts",
     "Stop returns only reward 1; Continue returns reward -0.01 and the next buffer",
     "there are no reset, truncation, error, status, or other controller-visible result fields",
     "all arithmetic is exact real arithmetic",
@@ -119,14 +120,16 @@ class NamedPredicate:
 
 @dataclass(frozen=True, slots=True)
 class ThermostatVariables:
-    temperature: Any
+    physical_temperature: Any
+    sensor_temperature: Any
     setpoint: Any
     heater_on: Any
     ac_on: Any
     current_time: Any
 
     def expressions(self) -> tuple[Any, ...]:
-        return (self.temperature, self.setpoint, self.heater_on, self.ac_on, self.current_time)
+        return (self.physical_temperature, self.sensor_temperature, self.setpoint,
+                self.heater_on, self.ac_on, self.current_time)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +160,7 @@ class ThermostatRelation:
     next: ThermostatVariables
     domain: Any
     initial: Any
+    sensor_relation: Any
     enabled: Any
     completion: Any
     required_action: Any
@@ -181,7 +185,8 @@ class ThermostatRelation:
         return {
             "query": QUERY_NAME,
             "source_sha256": self.source_sha256,
-            "observation": ("setpoint", "temperature"),
+            "observation": ("setpoint", "sensor_temperature"),
+            "sensor_relation": "sensor_temperature == physical_temperature at decision epochs",
             "proposed_action": "integer in {0, 1, 2, 3}",
             "executed_action": "SpecShield keep-valid-otherwise-replace decision",
             "result_schema": RESULT_SCHEMA,
@@ -269,7 +274,8 @@ def _action_has_ac(z3: Any, action: Any) -> Any:
 
 def _new_variables(z3: Any, prefix: str) -> ThermostatVariables:
     return ThermostatVariables(
-        temperature=z3.Real(prefix + "temperature"),
+        physical_temperature=z3.Real(prefix + "physical_temperature"),
+        sensor_temperature=z3.Real(prefix + "sensor_temperature"),
         setpoint=z3.Real(prefix + "setpoint"),
         heater_on=z3.Bool(prefix + "heater_on"),
         ac_on=z3.Bool(prefix + "ac_on"),
@@ -297,7 +303,8 @@ def _buffer_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVaria
     return z3.And(
         relation.domain,
         buffer.current_setpoint == relation.current.setpoint,
-        buffer.current_temperature == relation.current.temperature,
+        buffer.current_temperature == relation.current.sensor_temperature,
+        relation.sensor_relation,
         buffer.prior_executed_action >= 0,
         buffer.prior_executed_action <= 3,
         relation.current.heater_on == _action_has_heater(z3, buffer.prior_executed_action),
@@ -310,7 +317,7 @@ def _initial_buffer(z3: Any, relation: ThermostatRelation, buffer: BufferVariabl
     return z3.And(
         relation.initial,
         buffer.current_setpoint == relation.current.setpoint,
-        buffer.current_temperature == relation.current.temperature,
+        buffer.current_temperature == relation.current.sensor_temperature,
         buffer.prior_1_setpoint == _real(z3, 0),
         buffer.prior_1_temperature == _real(z3, 0),
         buffer.prior_2_setpoint == _real(z3, 0),
@@ -322,7 +329,7 @@ def _initial_buffer(z3: Any, relation: ThermostatRelation, buffer: BufferVariabl
 def _next_buffer(relation: ThermostatRelation, buffer: BufferVariables) -> tuple[Any, ...]:
     return (
         relation.next.setpoint,
-        relation.next.temperature,
+        relation.next.sensor_temperature,
         buffer.current_setpoint,
         buffer.current_temperature,
         buffer.prior_1_setpoint,
@@ -363,9 +370,10 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         outside >= _real(z3, -10),
         outside <= _real(z3, 50),
     )
+    sensor_relation = current.sensor_temperature == current.physical_temperature
     enabled = z3.And(proposed >= 0, proposed <= 3)
-    heater_required = current.setpoint >= current.temperature + tolerance
-    ac_required = current.setpoint <= current.temperature - tolerance
+    heater_required = current.setpoint >= current.sensor_temperature + tolerance
+    ac_required = current.setpoint <= current.sensor_temperature - tolerance
     required_action = z3.If(heater_required, 1, 0) + z3.If(ac_required, 2, 0)
     proposal_heater = _action_has_heater(z3, proposed)
     proposal_ac = _action_has_ac(z3, proposed)
@@ -379,22 +387,23 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
     shield_replaced = z3.Or(proposal_is_dead, z3.Not(proposal_satisfies))
     executed = z3.If(shield_replaced, required_action, proposed)
     completion = z3.And(
-        current.setpoint <= current.temperature + tolerance,
-        current.setpoint >= current.temperature - tolerance,
+        current.setpoint <= current.sensor_temperature + tolerance,
+        current.setpoint >= current.sensor_temperature - tolerance,
         z3.Not(current.heater_on),
         z3.Not(current.ac_on),
     )
     net_power = z3.If(_action_has_heater(z3, executed), heater_power, _real(z3, 0)) + z3.If(
         _action_has_ac(z3, executed), ac_power, _real(z3, 0)
     )
-    temperature_next = current.temperature + (
-        (net_power - loss * (current.temperature - outside)) * dt
+    temperature_next = current.physical_temperature + (
+        (net_power - loss * (current.physical_temperature - outside)) * dt
         / (volume * density * heat_capacity)
     )
     # The successor and result are expressions, not a satisfiable relation.
     # Therefore every enabled input has exactly one Stop or Continue result.
     next_ = ThermostatVariables(
-        temperature=temperature_next,
+        physical_temperature=temperature_next,
+        sensor_temperature=temperature_next,
         setpoint=current.setpoint,
         heater_on=_action_has_heater(z3, executed),
         ac_on=_action_has_ac(z3, executed),
@@ -402,7 +411,8 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
     )
     initial = z3.And(
         domain,
-        current.temperature == _real(z3, Fraction(239, 10)),
+        current.physical_temperature == _real(z3, Fraction(239, 10)),
+        current.sensor_temperature == _real(z3, Fraction(239, 10)),
         current.heater_on == z3.BoolVal(False),
         current.ac_on == z3.BoolVal(False),
         current.current_time == _real(z3, 0),
@@ -418,7 +428,8 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
             "monitored",
             z3.Implies(
                 current.current_time > _real(z3, 0),
-                z3.Implies(current.temperature < current.setpoint - tolerance, current.heater_on),
+                z3.Implies(current.sensor_temperature < current.setpoint - tolerance,
+                           current.heater_on),
             ),
         ),
         NamedPredicate(
@@ -426,7 +437,8 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
             "monitored",
             z3.Implies(
                 current.current_time > _real(z3, 0),
-                z3.Implies(current.temperature > current.setpoint + tolerance, current.ac_on),
+                z3.Implies(current.sensor_temperature > current.setpoint + tolerance,
+                           current.ac_on),
             ),
         ),
     )
@@ -439,6 +451,7 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         next=next_,
         domain=domain,
         initial=initial,
+        sensor_relation=sensor_relation,
         enabled=enabled,
         completion=completion,
         required_action=required_action,
@@ -447,8 +460,8 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         shield_replaced_proposal=shield_replaced,
         executed_action=executed,
         outcome_tag=z3.If(completion, 0, 1),
-        observation=(current.setpoint, current.temperature),
-        next_observation=(next_.setpoint, next_.temperature),
+        observation=(current.setpoint, current.sensor_temperature),
+        next_observation=(next_.setpoint, next_.sensor_temperature),
         reward=z3.If(completion, _real(z3, 1), _real(z3, Fraction(-1, 100))),
         properties=properties,
         assumptions=CONTRACT_ASSUMPTIONS,

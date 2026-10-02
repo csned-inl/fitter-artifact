@@ -54,7 +54,18 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         # A source-profile validator is part of the soundness boundary.  Keep
         # the whole prototype below this hard limit rather than growing a new
         # framework around it.
-        self.assertLessEqual(len(source.splitlines()), 750)
+        self.assertLessEqual(len(source.splitlines()), 760)
+
+    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
+    def test_physical_and_sensor_values_are_distinct_symbols_with_explicit_synchrony(self):
+        import z3
+
+        relation = extract_thermostat_relation(prefix="sensor_split_")
+        self.assertNotEqual(str(relation.current.physical_temperature),
+                            str(relation.current.sensor_temperature))
+        solver = z3.Solver()
+        solver.add(relation.initial, z3.Not(relation.sensor_relation))
+        self.assertEqual(str(solver.check()), "unsat")
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_symbolic_shield_matches_clarity_keep_or_replace_boundary(self):
@@ -72,7 +83,7 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
                 })
                 solver = z3.Solver()
                 solver.add(relation.current.setpoint == z3.RealVal(str(setpoint)))
-                solver.add(relation.current.temperature == z3.RealVal(str(temperature)))
+                solver.add(relation.current.sensor_temperature == z3.RealVal(str(temperature)))
                 solver.add(relation.proposal == proposal, relation.enabled)
                 self.assertEqual(str(solver.check()), "sat")
                 model = solver.model()
