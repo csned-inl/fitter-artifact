@@ -35,7 +35,24 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_PATH = ROOT / "src" / "clarity" / "models" / "thermostat" / "model.sysml"
 FIXED_DT = Fraction(1, 10)
 QUERY_NAME = "thermostat_exact_real_bobs2_bact1_v1"
+SEMANTIC_PROFILE = "thermostat_atomic_exact_real_v1"
+APPROVED_SOURCE_SHA256 = "44dec2333511c5cf7a40ad1828b612a043f9c7c71f6b960c276ce866f4a521aa"
 MAX_SMT2_BYTES = 16_384
+RESULT_SCHEMA = ("Stop(reward)", "Continue(reward, next_buffer)")
+CONTRACT_ASSUMPTIONS = (
+    "the approved source hash and thermostat_atomic_exact_real_v1 profile are exact",
+    "dt is the exact real value 1/10",
+    "outside temperature is fixed for one MDP instance, including every reset",
+    "setpoint is reset-selectable state and is observed exactly",
+    "reset sets temperature to 23.9, time to zero, actuator flags/outputs off, and history to zero",
+    "one step observes setpoint/temperature and tests completion before any action",
+    "on Continue the executed action equals the source-required action; a different proposal is replaced",
+    "actuator state/output updates atomically with no queue, delay, error, or unmatched-command effect",
+    "the exact thermal and clock equations run once, then the observation buffer shifts",
+    "Stop returns only reward 1; Continue returns reward -0.01 and the next buffer",
+    "there are no reset, truncation, error, status, or other controller-visible result fields",
+    "all arithmetic is exact real arithmetic",
+)
 
 
 class UnsupportedThermostatModel(ValueError):
@@ -143,8 +160,7 @@ class ThermostatRelation:
     enabled: Any
     completion: Any
     executed_action: Any
-    continue_relation: Any
-    step: Any
+    outcome_tag: Any
     observation: tuple[Any, Any]
     next_observation: tuple[Any, Any]
     reward: Any
@@ -163,7 +179,8 @@ class ThermostatRelation:
             "source_sha256": self.source_sha256,
             "observation": ("setpoint", "temperature"),
             "proposed_action": "integer in {0, 1, 2, 3}",
-            "executed_action": "source-derived neural requirement action",
+            "executed_action": "query-supplied replacement rule checked against the source requirement",
+            "result_schema": RESULT_SCHEMA,
             "properties": tuple((item.name, item.role) for item in self.properties),
             "assumptions": self.assumptions,
         }
@@ -324,7 +341,6 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
                     proposal: Any | None = None) -> ThermostatRelation:
     z3 = _z3()
     current = _new_variables(z3, prefix)
-    next_ = _new_variables(z3, prefix + "next_")
     outside = outside_temperature if outside_temperature is not None else z3.Real(prefix + "outside_temperature")
     proposed = proposal if proposal is not None else z3.Int(prefix + "proposal")
 
@@ -361,16 +377,15 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         (net_power - loss * (current.temperature - outside)) * dt
         / (volume * density * heat_capacity)
     )
-    continue_relation = z3.And(
-        next_.temperature == temperature_next,
-        next_.setpoint == current.setpoint,
-        next_.heater_on == _action_has_heater(z3, executed),
-        next_.ac_on == _action_has_ac(z3, executed),
-        next_.current_time == current.current_time + dt,
+    # The successor and result are expressions, not a satisfiable relation.
+    # Therefore every enabled input has exactly one Stop or Continue result.
+    next_ = ThermostatVariables(
+        temperature=temperature_next,
+        setpoint=current.setpoint,
+        heater_on=_action_has_heater(z3, executed),
+        ac_on=_action_has_ac(z3, executed),
+        current_time=current.current_time + dt,
     )
-    # Stop has no fabricated successor; the Boolean formula below only binds
-    # successor values in the continuing branch.
-    step = z3.Or(completion, z3.And(z3.Not(completion), continue_relation))
     initial = z3.And(
         domain,
         current.temperature == _real(z3, Fraction(239, 10)),
@@ -401,15 +416,6 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
             ),
         ),
     )
-    assumptions = (
-        "outside temperature is fixed for one certified MDP instance",
-        "setpoint is reset-selectable state and is observed exactly",
-        "sensor reading at the decision epoch equals the current modeled temperature",
-        "the neural requirement defines the deterministic shielded executed action",
-        "executed actuator bits take effect for the one following thermal update",
-        "completion reads pre-action controller flags and ends the current trace",
-        "all arithmetic in this prototype is exact real arithmetic",
-    )
     return ThermostatRelation(
         source_sha256=source_sha256,
         prefix=prefix,
@@ -422,13 +428,12 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         enabled=enabled,
         completion=completion,
         executed_action=executed,
-        continue_relation=continue_relation,
-        step=step,
+        outcome_tag=z3.If(completion, 0, 1),
         observation=(current.setpoint, current.temperature),
         next_observation=(next_.setpoint, next_.temperature),
         reward=z3.If(completion, _real(z3, 1), _real(z3, Fraction(-1, 100))),
         properties=properties,
-        assumptions=assumptions,
+        assumptions=CONTRACT_ASSUMPTIONS,
     )
 
 
@@ -611,10 +616,13 @@ def validate_thermostat_source(model_path: str | Path | None = None) -> str:
     """
 
     selected = Path(model_path) if model_path is not None else DEFAULT_MODEL_PATH
+    source_sha256 = hashlib.sha256(selected.read_bytes()).hexdigest()
+    _require(source_sha256 == APPROVED_SOURCE_SHA256,
+             "source does not match the approved thermostat source hash")
     parser = SysMLParser(str(selected))
     parser.parse()
     _validate_source(parser)
-    return hashlib.sha256(selected.read_bytes()).hexdigest()
+    return source_sha256
 
 
 def extract_thermostat_relation(model_path: str | Path | None = None, *, prefix: str = "") -> ThermostatRelation:
@@ -647,11 +655,9 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
     right_buffer = _new_buffer(z3, "right_")
     left_invariant = _buffer_invariant(z3, left, left_buffer)
     right_invariant = _buffer_invariant(z3, right, right_buffer)
-    left_transition = z3.Or(left.completion, z3.And(z3.Not(left.completion), left.continue_relation))
-    right_transition = z3.Or(right.completion, z3.And(z3.Not(right.completion), right.continue_relation))
     next_buffers_equal = _equal(z3, _next_buffer(left, left_buffer), _next_buffer(right, right_buffer))
     result_difference = z3.Or(
-        left.completion != right.completion,
+        left.outcome_tag != right.outcome_tag,
         left.reward != right.reward,
         z3.And(z3.Not(left.completion), z3.Not(right.completion), z3.Not(next_buffers_equal)),
     )
@@ -661,8 +667,6 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
         _equal(z3, left_buffer.expressions(), right_buffer.expressions()),
         left.enabled,
         right.enabled,
-        left_transition,
-        right_transition,
         result_difference,
     )
     initial = _initial_buffer(z3, left, left_buffer)
@@ -675,7 +679,6 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
         left_invariant,
         left.enabled,
         z3.Not(left.completion),
-        left.continue_relation,
         z3.Not(_next_invariant(z3, left, left_buffer)),
     )
     assumptions = source.assumptions + (
@@ -698,11 +701,15 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
 
 __all__ = [
     "BufferVariables",
+    "APPROVED_SOURCE_SHA256",
+    "CONTRACT_ASSUMPTIONS",
     "DEFAULT_MODEL_PATH",
     "FIXED_DT",
     "MAX_SMT2_BYTES",
     "NamedPredicate",
     "QUERY_NAME",
+    "RESULT_SCHEMA",
+    "SEMANTIC_PROFILE",
     "ThermostatPairedMarkovQuery",
     "ThermostatRelation",
     "ThermostatVariables",

@@ -12,6 +12,15 @@ engine, invariant synthesizer, or workstation loop. If the needed source
 semantics cannot be represented under this boundary, production stops and the
 user decides the next step.
 
+The first implementation uses the smallest fail-closed form: it pins the exact
+reviewed thermostat source SHA-256, names one flat semantic profile and
+contract-assumption tuple, and represents `Stop`/`Continue` plus the successor
+buffer as direct Z3 expressions. It does not introduce a general machine type
+or separate totality solver. The current conditional profile fixes outside
+temperature for the entire MDP instance including resets, and treats the
+proposal-to-executed replacement rule as query-supplied behavior rather than
+behavior synthesized from the neural requirement.
+
 ## 1. Representation problem and exact scope
 
 The mathematical specification in the SysML model is the primitive. The required representation must preserve the thermostat model's equations, inequalities, finite state, decision boundary, and query-relevant property roles without compiling or symbolically replaying a simulator.
