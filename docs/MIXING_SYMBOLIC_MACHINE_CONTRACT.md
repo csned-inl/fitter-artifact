@@ -4,7 +4,9 @@ THE PLAN IS TO GIVE THE MINIMAL AMOUNT OF INFORMATION TO Z3 TO PROVE THE BUFFERE
 
 # Mixing Machine direct symbolic contract
 
-Status: focused prototype for the fixed `(b_obs=2, b_act=1)` query.
+Status: focused prototype retaining the fixed `(b_obs=2, b_act=1)` regression
+query and analytically proposing `(b_obs=0, b_act=0)` for independent Z3
+certification.
 
 ## Authoritative source
 

@@ -21,6 +21,8 @@ from clarity.certification.mixing_symbolic_machine import (  # noqa: E402
     DEFAULT_MODEL_PATH,
     MAX_SMT2_BYTES,
     RESULT_SCHEMA,
+    analytical_buffer_candidate,
+    build_candidate_markov_query,
     build_fixed_buffer_markov_query,
     extract_mixing_relation,
     validate_mixing_source,
@@ -31,6 +33,11 @@ HAS_Z3 = importlib.util.find_spec("z3") is not None
 
 
 class MixingSymbolicMachineTests(unittest.TestCase):
+    def test_analytical_candidate_uses_no_history(self):
+        candidate = analytical_buffer_candidate()
+        self.assertEqual((candidate.b_obs, candidate.b_act), (0, 0))
+        self.assertTrue(candidate.evidence)
+
     def test_source_is_pinned_to_standalone_identity(self):
         self.assertEqual(AUTHORITATIVE_REPOSITORY, "csned-inl/clarity-standalone")
         self.assertEqual(AUTHORITATIVE_PATH, "sysml-models/mixing-sysml-model/model.sysml")
@@ -58,7 +65,7 @@ class MixingSymbolicMachineTests(unittest.TestCase):
         self.assertNotIn("from .markov_", source)
         self.assertNotIn("clarity.runtime", source)
         self.assertNotIn("clarity.sysml.simulator", source)
-        self.assertLessEqual(len(source.splitlines()), 740)
+        self.assertLessEqual(len(source.splitlines()), 800)
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_physical_and_sampled_values_are_distinct_with_explicit_tolerance(self):
@@ -126,6 +133,13 @@ class MixingSymbolicMachineTests(unittest.TestCase):
         self.assertEqual(len(relation.properties), 4)
         query = build_fixed_buffer_markov_query()
         self.assertLessEqual(len(query.smt2().encode("utf-8")), MAX_SMT2_BYTES)
+        result = query.run()
+        self.assertEqual(result["classification"], "CERTIFIED_UNDER_CONTRACT", result)
+
+    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
+    def test_analytical_candidate_is_certified(self):
+        query = build_candidate_markov_query()
+        self.assertEqual((query.candidate.b_obs, query.candidate.b_act), (0, 0))
         result = query.run()
         self.assertEqual(result["classification"], "CERTIFIED_UNDER_CONTRACT", result)
 

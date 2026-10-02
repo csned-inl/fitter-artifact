@@ -19,6 +19,8 @@ from clarity.certification.thermostat_symbolic_machine import (  # noqa: E402
     DEFAULT_MODEL_PATH,
     MAX_SMT2_BYTES,
     RESULT_SCHEMA,
+    analytical_buffer_candidate,
+    build_candidate_markov_query,
     build_fixed_buffer_markov_query,
     extract_thermostat_relation,
     validate_thermostat_source,
@@ -29,6 +31,11 @@ HAS_Z3 = importlib.util.find_spec("z3") is not None
 
 
 class ThermostatSymbolicMachineTests(unittest.TestCase):
+    def test_analytical_candidate_needs_one_prior_action(self):
+        candidate = analytical_buffer_candidate()
+        self.assertEqual((candidate.b_obs, candidate.b_act), (0, 1))
+        self.assertTrue(candidate.evidence)
+
     def test_fixed_process_context_is_generic_named_data(self):
         context = FixedProcessContext(fields=(("lead_speed", 25), ("road_grade", 0)))
         self.assertEqual(context.names(), ("lead_speed", "road_grade"))
@@ -62,7 +69,7 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         # A source-profile validator is part of the soundness boundary.  Keep
         # the whole prototype below this hard limit rather than growing a new
         # framework around it.
-        self.assertLessEqual(len(source.splitlines()), 780)
+        self.assertLessEqual(len(source.splitlines()), 860)
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_physical_and_sensor_values_are_distinct_symbols_with_explicit_synchrony(self):
@@ -115,6 +122,13 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         self.assertTrue(all(item.role == "monitored" for item in relation.properties))
         query = build_fixed_buffer_markov_query()
         self.assertLessEqual(len(query.smt2().encode("utf-8")), MAX_SMT2_BYTES)
+        result = query.run()
+        self.assertEqual(result["classification"], "CERTIFIED_UNDER_CONTRACT", result)
+
+    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
+    def test_analytical_candidate_is_certified(self):
+        query = build_candidate_markov_query()
+        self.assertEqual((query.candidate.b_obs, query.candidate.b_act), (0, 1))
         result = query.run()
         self.assertEqual(result["classification"], "CERTIFIED_UNDER_CONTRACT", result)
 

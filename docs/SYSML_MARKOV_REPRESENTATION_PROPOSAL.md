@@ -38,6 +38,11 @@ cruise, or other model semantics. The fields are visible to the proof and
 certificate but are not added to the controller observation unless the source
 exposes them.
 
+`BUFFER_CANDIDATE_ANALYSIS.md` defines the pre-solver candidate stage. It takes
+maximum exact reconstruction lags from the checked source equations and hands
+that candidate to the paired prover. Its evidence cannot substitute for the
+Z3 certificate.
+
 ## 1. Representation problem and exact scope
 
 The mathematical specification in the SysML model is the primitive. The required representation must preserve the thermostat model's equations, inequalities, finite state, decision boundary, and query-relevant property roles without compiling or symbolically replaying a simulator.

@@ -15,7 +15,12 @@ import importlib
 from pathlib import Path
 from typing import Any, Iterable
 
-from clarity.certification.symbolic_process import FixedProcessContext
+from clarity.certification.symbolic_process import (
+    BufferCandidate,
+    FixedProcessContext,
+    ReconstructionRequirement,
+    derive_buffer_candidate,
+)
 from clarity.sysml.parser import (
     AssignStmt,
     BinaryExpr,
@@ -209,6 +214,7 @@ class MixingPairedMarkovQuery:
     invariant_closed: Any
     counterexample: Any
     assumptions: tuple[str, ...]
+    candidate: BufferCandidate
 
     def smt2(self) -> str:
         z3 = _z3()
@@ -419,17 +425,21 @@ def _build_relation(*, source_sha256: str, prefix: str,
     )
 
 
-def _buffer_invariant(z3: Any, relation: MixingRelation, buffer: MixingBuffer) -> Any:
+def _buffer_invariant(z3: Any, relation: MixingRelation, buffer: MixingBuffer,
+                      *, b_act: int = 1) -> Any:
+    actuator_reconstruction = () if b_act == 0 else (
+        relation.current.valve_1_open == _bit(z3, buffer.prior_executed_action, 1),
+        relation.current.valve_2_open == _bit(z3, buffer.prior_executed_action, 2),
+        relation.current.pump_1_running == _bit(z3, buffer.prior_executed_action, 4),
+        relation.current.pump_2_running == _bit(z3, buffer.prior_executed_action, 8),
+    )
     return z3.And(
         relation.domain,
         relation.sample_relation,
         _equal(z3, buffer.current_observation, relation.observation),
         buffer.prior_executed_action >= 0,
         buffer.prior_executed_action <= 15,
-        relation.current.valve_1_open == _bit(z3, buffer.prior_executed_action, 1),
-        relation.current.valve_2_open == _bit(z3, buffer.prior_executed_action, 2),
-        relation.current.pump_1_running == _bit(z3, buffer.prior_executed_action, 4),
-        relation.current.pump_2_running == _bit(z3, buffer.prior_executed_action, 8),
+        *actuator_reconstruction,
     )
 
 
@@ -452,13 +462,16 @@ def _next_buffer(relation: MixingRelation, buffer: MixingBuffer) -> tuple[Any, .
     )
 
 
-def _next_invariant(z3: Any, relation: MixingRelation, buffer: MixingBuffer) -> Any:
+def _next_invariant(z3: Any, relation: MixingRelation, buffer: MixingBuffer,
+                    *, b_act: int = 1) -> Any:
     replacements = list(zip(
         relation.current.expressions() + buffer.expressions(),
         relation.next.expressions() + _next_buffer(relation, buffer),
         strict=True,
     ))
-    return z3.substitute(_buffer_invariant(z3, relation, buffer), *replacements)
+    return z3.substitute(
+        _buffer_invariant(z3, relation, buffer, b_act=b_act), *replacements
+    )
 
 
 def _validate_source(parser: SysMLParser) -> None:
@@ -642,7 +655,56 @@ def extract_mixing_relation(model_path: str | Path | None = None, *, prefix: str
     return _build_relation(source_sha256=source_sha256, prefix=prefix)
 
 
-def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> MixingPairedMarkovQuery:
+def analytical_buffer_candidate() -> BufferCandidate:
+    """Derive history depth from the checked Mixing decision equations."""
+
+    return derive_buffer_candidate((
+        ReconstructionRequirement(
+            "held sampled levels", "current_observation", 0,
+            "Policy receives observedLevel1 and observedLevel2 directly",
+        ),
+        ReconstructionRequirement(
+            "physical feeder levels", "current_observation", 0,
+            "at Policy boundaries physical_level_i = sampled_level_i + toleranceMl",
+        ),
+        ReconstructionRequirement(
+            "scenario originals and targets", "fixed_context", 0,
+            "they are fixed for one process instance and are Policy inputs",
+        ),
+        ReconstructionRequirement(
+            "incoming pump and valve state", "overwritten_before_use", 0,
+            "the selected outcome and properties use the newly executed command",
+        ),
+    ))
+
+
+def _buffer_projection(buffer: MixingBuffer, candidate: BufferCandidate) -> tuple[Any, ...]:
+    if candidate.b_obs > 2 or candidate.b_act > 1:
+        raise ValueError("Mixing prototype supports at most b_obs=2 and b_act=1")
+    result = list(buffer.current_observation)
+    if candidate.b_obs >= 1:
+        result.extend(buffer.prior_observation_1)
+    if candidate.b_obs >= 2:
+        result.extend(buffer.prior_observation_2)
+    if candidate.b_act == 1:
+        result.append(buffer.prior_executed_action)
+    return tuple(result)
+
+
+def _next_projection(relation: MixingRelation, buffer: MixingBuffer,
+                     candidate: BufferCandidate) -> tuple[Any, ...]:
+    result = list(relation.next_observation)
+    if candidate.b_obs >= 1:
+        result.extend(buffer.current_observation)
+    if candidate.b_obs >= 2:
+        result.extend(buffer.prior_observation_1)
+    if candidate.b_act == 1:
+        result.append(relation.executed_action)
+    return tuple(result)
+
+
+def build_markov_query(candidate: BufferCandidate,
+                       model_path: str | Path | None = None) -> MixingPairedMarkovQuery:
     z3 = _z3()
     source_sha256 = validate_mixing_source(model_path)
     fixed = _new_fixed_context(z3)
@@ -652,10 +714,11 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> Mix
     right = left.renamed("right_", fixed=fixed, proposal=proposal)
     left_buffer = _new_buffer(z3, "left_")
     right_buffer = _new_buffer(z3, "right_")
-    left_invariant = _buffer_invariant(z3, left, left_buffer)
-    right_invariant = _buffer_invariant(z3, right, right_buffer)
+    left_invariant = _buffer_invariant(z3, left, left_buffer, b_act=candidate.b_act)
+    right_invariant = _buffer_invariant(z3, right, right_buffer, b_act=candidate.b_act)
     next_buffers_equal = _equal(
-        z3, _next_buffer(left, left_buffer), _next_buffer(right, right_buffer)
+        z3, _next_projection(left, left_buffer, candidate),
+        _next_projection(right, right_buffer, candidate),
     )
     statuses_equal = _equal(
         z3,
@@ -671,7 +734,8 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> Mix
     counterexample = z3.And(
         left_invariant,
         right_invariant,
-        _equal(z3, left_buffer.expressions(), right_buffer.expressions()),
+        _equal(z3, _buffer_projection(left_buffer, candidate),
+               _buffer_projection(right_buffer, candidate)),
         left.enabled,
         right.enabled,
         result_difference,
@@ -686,16 +750,28 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> Mix
         left_invariant,
         left.enabled,
         left.outcome_tag == 1,
-        z3.Not(_next_invariant(z3, left, left_buffer)),
+        z3.Not(_next_invariant(z3, left, left_buffer, b_act=candidate.b_act)),
     )
     assumptions = CONTRACT_ASSUMPTIONS + (
-        "the fixed controller buffer contains current observation, two prior observations, and one prior executed action",
+        f"the candidate buffer contains current observation, {candidate.b_obs} prior observations, and {candidate.b_act} prior executed actions",
         "the MDP action is the proposed action and shield execution is internal to the transition",
     )
     return MixingPairedMarkovQuery(
         left, right, left_buffer, right_buffer, initial_empty,
-        initial_contained, invariant_closed, counterexample, assumptions,
+        initial_contained, invariant_closed, counterexample, assumptions, candidate,
     )
+
+
+def build_candidate_markov_query(
+    model_path: str | Path | None = None,
+) -> MixingPairedMarkovQuery:
+    return build_markov_query(analytical_buffer_candidate(), model_path)
+
+
+def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> MixingPairedMarkovQuery:
+    """Retain the original `(b_obs=2, b_act=1)` regression query."""
+
+    return build_markov_query(BufferCandidate(2, 1, ()), model_path)
 
 
 __all__ = [
@@ -715,7 +791,10 @@ __all__ = [
     "RESULT_SCHEMA",
     "SEMANTIC_PROFILE",
     "UnsupportedMixingModel",
+    "analytical_buffer_candidate",
+    "build_candidate_markov_query",
     "build_fixed_buffer_markov_query",
+    "build_markov_query",
     "extract_mixing_relation",
     "validate_mixing_source",
 ]

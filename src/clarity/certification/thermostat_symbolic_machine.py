@@ -30,7 +30,12 @@ from clarity.sysml.parser import (
     SysMLParser,
     UnaryExpr,
 )
-from clarity.certification.symbolic_process import FixedProcessContext
+from clarity.certification.symbolic_process import (
+    BufferCandidate,
+    FixedProcessContext,
+    ReconstructionRequirement,
+    derive_buffer_candidate,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_PATH = ROOT / "src" / "clarity" / "models" / "thermostat" / "model.sysml"
@@ -212,6 +217,7 @@ class ThermostatPairedMarkovQuery:
     counterexample: Any
     source_sha256: str
     assumptions: tuple[str, ...]
+    candidate: BufferCandidate
 
     def smt2(self) -> str:
         z3 = _z3()
@@ -322,7 +328,12 @@ def _equal(z3: Any, left: Iterable[Any], right: Iterable[Any]) -> Any:
     return z3.And(*(a == b for a, b in zip(left, right, strict=True)))
 
 
-def _buffer_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVariables) -> Any:
+def _buffer_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVariables,
+                      *, b_act: int = 1) -> Any:
+    actuator_reconstruction = () if b_act == 0 else (
+        relation.current.heater_on == _action_has_heater(z3, buffer.prior_executed_action),
+        relation.current.ac_on == _action_has_ac(z3, buffer.prior_executed_action),
+    )
     return z3.And(
         relation.domain,
         buffer.current_setpoint == relation.current.setpoint,
@@ -330,8 +341,7 @@ def _buffer_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVaria
         relation.sensor_relation,
         buffer.prior_executed_action >= 0,
         buffer.prior_executed_action <= 3,
-        relation.current.heater_on == _action_has_heater(z3, buffer.prior_executed_action),
-        relation.current.ac_on == _action_has_ac(z3, buffer.prior_executed_action),
+        *actuator_reconstruction,
         relation.current.current_time >= _real(z3, 0),
     )
 
@@ -361,13 +371,14 @@ def _next_buffer(relation: ThermostatRelation, buffer: BufferVariables) -> tuple
     )
 
 
-def _next_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVariables) -> Any:
+def _next_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVariables,
+                    *, b_act: int = 1) -> Any:
     replacements = list(zip(
         relation.current.expressions() + buffer.expressions(),
         relation.next.expressions() + _next_buffer(relation, buffer),
         strict=True,
     ))
-    current = _buffer_invariant(z3, relation, buffer)
+    current = _buffer_invariant(z3, relation, buffer, b_act=b_act)
     return z3.substitute(current, *replacements)
 
 
@@ -683,12 +694,57 @@ def extract_thermostat_relation(model_path: str | Path | None = None, *, prefix:
     return _build_relation(source_sha256=source_sha256, prefix=prefix)
 
 
-def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> ThermostatPairedMarkovQuery:
-    """Build the one exact-real `(b_obs=2, b_act=1)` paired query.
+def analytical_buffer_candidate() -> BufferCandidate:
+    """Derive history depth from the checked thermostat equations."""
 
-    Outside temperature and proposed action are shared.  The setpoint remains
-    an observed reset-selectable state in each copy.
-    """
+    return derive_buffer_candidate((
+        ReconstructionRequirement(
+            "setpoint and sensor temperature", "current_observation", 0,
+            "Policy observes both values directly",
+        ),
+        ReconstructionRequirement(
+            "physical temperature", "current_observation", 0,
+            "the supported synchronous profile proves physical == sensor",
+        ),
+        ReconstructionRequirement(
+            "heater and AC flags", "prior_action", 1,
+            "the pre-action completion test reads flags set by the prior executed action",
+        ),
+        ReconstructionRequirement(
+            "current time", "proved_irrelevant", 0,
+            "time changes no selected observation, reward, outcome, or successor buffer",
+        ),
+    ))
+
+
+def _buffer_projection(buffer: BufferVariables, candidate: BufferCandidate) -> tuple[Any, ...]:
+    if candidate.b_obs > 2 or candidate.b_act > 1:
+        raise ValueError("thermostat prototype supports at most b_obs=2 and b_act=1")
+    result = list(buffer.expressions()[:2])
+    if candidate.b_obs >= 1:
+        result.extend(buffer.expressions()[2:4])
+    if candidate.b_obs >= 2:
+        result.extend(buffer.expressions()[4:6])
+    if candidate.b_act == 1:
+        result.append(buffer.prior_executed_action)
+    return tuple(result)
+
+
+def _next_projection(relation: ThermostatRelation, buffer: BufferVariables,
+                     candidate: BufferCandidate) -> tuple[Any, ...]:
+    result = list(relation.next_observation)
+    if candidate.b_obs >= 1:
+        result.extend(buffer.expressions()[:2])
+    if candidate.b_obs >= 2:
+        result.extend(buffer.expressions()[2:4])
+    if candidate.b_act == 1:
+        result.append(relation.executed_action)
+    return tuple(result)
+
+
+def build_markov_query(candidate: BufferCandidate,
+                       model_path: str | Path | None = None) -> ThermostatPairedMarkovQuery:
+    """Build a paired query for one analytically proposed history depth."""
 
     z3 = _z3()
     source = extract_thermostat_relation(model_path, prefix="left_")
@@ -703,9 +759,12 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
     right = source.renamed("right_", fixed=fixed, proposal=proposal)
     left_buffer = _new_buffer(z3, "left_")
     right_buffer = _new_buffer(z3, "right_")
-    left_invariant = _buffer_invariant(z3, left, left_buffer)
-    right_invariant = _buffer_invariant(z3, right, right_buffer)
-    next_buffers_equal = _equal(z3, _next_buffer(left, left_buffer), _next_buffer(right, right_buffer))
+    left_invariant = _buffer_invariant(z3, left, left_buffer, b_act=candidate.b_act)
+    right_invariant = _buffer_invariant(z3, right, right_buffer, b_act=candidate.b_act)
+    next_buffers_equal = _equal(
+        z3, _next_projection(left, left_buffer, candidate),
+        _next_projection(right, right_buffer, candidate),
+    )
     result_difference = z3.Or(
         left.outcome_tag != right.outcome_tag,
         left.reward != right.reward,
@@ -714,7 +773,8 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
     counterexample = z3.And(
         left_invariant,
         right_invariant,
-        _equal(z3, left_buffer.expressions(), right_buffer.expressions()),
+        _equal(z3, _buffer_projection(left_buffer, candidate),
+               _buffer_projection(right_buffer, candidate)),
         left.enabled,
         right.enabled,
         result_difference,
@@ -730,10 +790,10 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
         left_invariant,
         left.enabled,
         z3.Not(left.completion),
-        z3.Not(_next_invariant(z3, left, left_buffer)),
+        z3.Not(_next_invariant(z3, left, left_buffer, b_act=candidate.b_act)),
     )
     assumptions = source.assumptions + (
-        "the buffer stores exact-real current observation, two prior observations, and one prior executed action",
+        f"the candidate buffer stores current observation, {candidate.b_obs} prior observations, and {candidate.b_act} prior executed actions",
         "the MDP action is the proposed action; shield execution is internal to the transition",
     )
     return ThermostatPairedMarkovQuery(
@@ -747,7 +807,20 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
         counterexample=counterexample,
         source_sha256=source.source_sha256,
         assumptions=assumptions,
+        candidate=candidate,
     )
+
+
+def build_candidate_markov_query(
+    model_path: str | Path | None = None,
+) -> ThermostatPairedMarkovQuery:
+    return build_markov_query(analytical_buffer_candidate(), model_path)
+
+
+def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> ThermostatPairedMarkovQuery:
+    """Retain the original `(b_obs=2, b_act=1)` regression query."""
+
+    return build_markov_query(BufferCandidate(2, 1, ()), model_path)
 
 
 __all__ = [
@@ -766,7 +839,10 @@ __all__ = [
     "ThermostatRelation",
     "ThermostatVariables",
     "UnsupportedThermostatModel",
+    "analytical_buffer_candidate",
+    "build_candidate_markov_query",
     "build_fixed_buffer_markov_query",
+    "build_markov_query",
     "extract_thermostat_relation",
     "validate_thermostat_source",
 ]
