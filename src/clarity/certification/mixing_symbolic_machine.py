@@ -296,7 +296,8 @@ def _equal(z3: Any, left: Iterable[Any], right: Iterable[Any]) -> Any:
 
 
 def _bit(z3: Any, action: Any, value: int) -> Any:
-    return z3.Mod(action / value, 2) == 1
+    return z3.Or(*(action == candidate for candidate in range(16)
+                   if candidate & value))
 
 
 def _fixed_domain(z3: Any, fixed: FixedProcessContext) -> Any:
