@@ -15,6 +15,29 @@ giving two source concepts the same symbolic variable.
 This rule directly addresses the earlier mixing-machine failure in which true
 physical values were collapsed with delayed sensor values.
 
+## Proof visibility versus controller visibility
+
+The proof object has three disjoint roles:
+
+- **fixed process context** is a generic collection of named background and
+  initial-condition fields shared by both compared histories of one MDP
+  instance;
+- **complete state** contains every evolving physical, sensor, actuator, delay,
+  and phase value needed by the transition;
+- **controller observation/buffer** contains only source-authorized visible
+  fields.
+
+The proof sees all three roles. Equality of controller buffers never implies
+equality of hidden state or fixed parameters by omission: fixed parameters are
+shared explicitly, while hidden state remains independently quantified.
+
+`FixedProcessContext` is model-independent and may contain zero or more named
+fields. A thermostat may declare outside temperature and thermal constants; a
+cruise model may instead declare lead-speed or road-profile conditions. A field
+belongs there only when the certified process contract keeps it fixed for the
+whole trace and reset regime. If it can evolve or be independently selected on
+reset, it belongs in complete state instead.
+
 ## Current thermostat coverage
 
 | Source concept | Symbolic treatment | Current limitation |
@@ -22,7 +45,7 @@ physical values were collapsed with delayed sensor values.
 | `Environment.temperatureCelcius` | `physical_temperature` | Exact-real thermal equation |
 | `TemperatureSensor.lastReadingCelcius`, controller `reading.temperatureCelcius`, and `lastObservedTemperature` | `sensor_temperature` | Distinct symbol, but the thermostat synchronous profile explicitly constrains it equal to physical temperature at each decision epoch |
 | Controller setpoint | Persistent, exactly observed state | Reset-selectable within `[13,33]` |
-| Outside temperature | Contract-fixed global | Fixed for the entire certified MDP instance, including resets; a varying outside temperature is not certified |
+| Outside temperature | First-class `FixedProcessContext["outside_temperature"]` shared by the paired histories | Fixed for the entire certified MDP instance, including resets; a varying outside temperature is not certified |
 | Controller heater/AC flags | State reconstructed from the prior executed action | Assumes atomic command application |
 | Physical actuator mode and heat output | Collapsed with controller flags by an explicit atomic-actuator contract | No actuator delay, queue, or independently evolving mode is supported |
 | `currentTime` | Hidden state retained in the relation | Proved irrelevant to the selected result under this profile |

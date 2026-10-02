@@ -30,6 +30,7 @@ from clarity.sysml.parser import (
     SysMLParser,
     UnaryExpr,
 )
+from clarity.certification.symbolic_process import FixedProcessContext
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_PATH = ROOT / "src" / "clarity" / "models" / "thermostat" / "model.sysml"
@@ -154,7 +155,7 @@ class ThermostatRelation:
 
     source_sha256: str
     prefix: str
-    outside_temperature: Any
+    fixed: FixedProcessContext
     proposal: Any
     current: ThermostatVariables
     next: ThermostatVariables
@@ -175,16 +176,18 @@ class ThermostatRelation:
     properties: tuple[NamedPredicate, ...]
     assumptions: tuple[str, ...]
 
-    def renamed(self, prefix: str, *, outside_temperature: Any | None = None, proposal: Any | None = None) -> "ThermostatRelation":
+    def renamed(self, prefix: str, *, fixed: FixedProcessContext | None = None,
+                proposal: Any | None = None) -> "ThermostatRelation":
         """Build an independent state copy while sharing contract-fixed values."""
 
         return _build_relation(source_sha256=self.source_sha256, prefix=prefix,
-                               outside_temperature=outside_temperature, proposal=proposal)
+                               fixed_parameters=fixed or self.fixed, proposal=proposal)
 
     def summary(self) -> dict[str, object]:
         return {
             "query": QUERY_NAME,
             "source_sha256": self.source_sha256,
+            "fixed_parameters": self.fixed.names(),
             "observation": ("setpoint", "sensor_temperature"),
             "sensor_relation": "sensor_temperature == physical_temperature at decision epochs",
             "proposed_action": "integer in {0, 1, 2, 3}",
@@ -272,6 +275,26 @@ def _action_has_ac(z3: Any, action: Any) -> Any:
     return z3.Or(action == 2, action == 3)
 
 
+def _new_thermostat_fixed_context(
+    z3: Any, *, outside_temperature: Any | None = None
+) -> FixedProcessContext:
+    outside = outside_temperature if outside_temperature is not None else z3.Real("outside_temperature")
+    return FixedProcessContext(fields=(
+        ("outside_temperature", outside),
+        ("dt", _real(z3, FIXED_DT)),
+        ("tolerance", _real(z3, 1)),
+        ("volume", _real(z3, 20)),
+        ("heat_loss_coefficient", _real(z3, 10)),
+        ("heater_power", _real(z3, 2000)),
+        ("ac_power", _real(z3, -2000)),
+        ("air_density", _real(z3, Fraction(6, 5))),
+        ("heat_capacity", _real(z3, 1005)),
+        ("initial_temperature", _real(z3, Fraction(239, 10))),
+        ("stop_reward", _real(z3, 1)),
+        ("continue_reward", _real(z3, Fraction(-1, 100))),
+    ))
+
+
 def _new_variables(z3: Any, prefix: str) -> ThermostatVariables:
     return ThermostatVariables(
         physical_temperature=z3.Real(prefix + "physical_temperature"),
@@ -348,32 +371,25 @@ def _next_invariant(z3: Any, relation: ThermostatRelation, buffer: BufferVariabl
     return z3.substitute(current, *replacements)
 
 
-def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any | None = None,
+def _build_relation(*, source_sha256: str, prefix: str,
+                    fixed_parameters: FixedProcessContext | None = None,
                     proposal: Any | None = None) -> ThermostatRelation:
     z3 = _z3()
     current = _new_variables(z3, prefix)
-    outside = outside_temperature if outside_temperature is not None else z3.Real(prefix + "outside_temperature")
+    fixed = fixed_parameters or _new_thermostat_fixed_context(
+        z3, outside_temperature=z3.Real(prefix + "outside_temperature"))
     proposed = proposal if proposal is not None else z3.Int(prefix + "proposal")
-
-    tolerance = _real(z3, 1)
-    dt = _real(z3, FIXED_DT)
-    volume = _real(z3, 20)
-    loss = _real(z3, 10)
-    heater_power = _real(z3, 2000)
-    ac_power = _real(z3, -2000)
-    density = _real(z3, Fraction(6, 5))
-    heat_capacity = _real(z3, 1005)
 
     domain = z3.And(
         current.setpoint >= _real(z3, 13),
         current.setpoint <= _real(z3, 33),
-        outside >= _real(z3, -10),
-        outside <= _real(z3, 50),
+        fixed["outside_temperature"] >= _real(z3, -10),
+        fixed["outside_temperature"] <= _real(z3, 50),
     )
     sensor_relation = current.sensor_temperature == current.physical_temperature
     enabled = z3.And(proposed >= 0, proposed <= 3)
-    heater_required = current.setpoint >= current.sensor_temperature + tolerance
-    ac_required = current.setpoint <= current.sensor_temperature - tolerance
+    heater_required = current.setpoint >= current.sensor_temperature + fixed["tolerance"]
+    ac_required = current.setpoint <= current.sensor_temperature - fixed["tolerance"]
     required_action = z3.If(heater_required, 1, 0) + z3.If(ac_required, 2, 0)
     proposal_heater = _action_has_heater(z3, proposed)
     proposal_ac = _action_has_ac(z3, proposed)
@@ -387,17 +403,20 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
     shield_replaced = z3.Or(proposal_is_dead, z3.Not(proposal_satisfies))
     executed = z3.If(shield_replaced, required_action, proposed)
     completion = z3.And(
-        current.setpoint <= current.sensor_temperature + tolerance,
-        current.setpoint >= current.sensor_temperature - tolerance,
+        current.setpoint <= current.sensor_temperature + fixed["tolerance"],
+        current.setpoint >= current.sensor_temperature - fixed["tolerance"],
         z3.Not(current.heater_on),
         z3.Not(current.ac_on),
     )
-    net_power = z3.If(_action_has_heater(z3, executed), heater_power, _real(z3, 0)) + z3.If(
-        _action_has_ac(z3, executed), ac_power, _real(z3, 0)
+    net_power = z3.If(
+        _action_has_heater(z3, executed), fixed["heater_power"], _real(z3, 0)
+    ) + z3.If(
+        _action_has_ac(z3, executed), fixed["ac_power"], _real(z3, 0)
     )
     temperature_next = current.physical_temperature + (
-        (net_power - loss * (current.physical_temperature - outside)) * dt
-        / (volume * density * heat_capacity)
+        (net_power - fixed["heat_loss_coefficient"]
+         * (current.physical_temperature - fixed["outside_temperature"])) * fixed["dt"]
+        / (fixed["volume"] * fixed["air_density"] * fixed["heat_capacity"])
     )
     # The successor and result are expressions, not a satisfiable relation.
     # Therefore every enabled input has exactly one Stop or Continue result.
@@ -407,12 +426,12 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         setpoint=current.setpoint,
         heater_on=_action_has_heater(z3, executed),
         ac_on=_action_has_ac(z3, executed),
-        current_time=current.current_time + dt,
+        current_time=current.current_time + fixed["dt"],
     )
     initial = z3.And(
         domain,
-        current.physical_temperature == _real(z3, Fraction(239, 10)),
-        current.sensor_temperature == _real(z3, Fraction(239, 10)),
+        current.physical_temperature == fixed["initial_temperature"],
+        current.sensor_temperature == fixed["initial_temperature"],
         current.heater_on == z3.BoolVal(False),
         current.ac_on == z3.BoolVal(False),
         current.current_time == _real(z3, 0),
@@ -428,7 +447,7 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
             "monitored",
             z3.Implies(
                 current.current_time > _real(z3, 0),
-                z3.Implies(current.sensor_temperature < current.setpoint - tolerance,
+                z3.Implies(current.sensor_temperature < current.setpoint - fixed["tolerance"],
                            current.heater_on),
             ),
         ),
@@ -437,7 +456,7 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
             "monitored",
             z3.Implies(
                 current.current_time > _real(z3, 0),
-                z3.Implies(current.sensor_temperature > current.setpoint + tolerance,
+                z3.Implies(current.sensor_temperature > current.setpoint + fixed["tolerance"],
                            current.ac_on),
             ),
         ),
@@ -445,7 +464,7 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
     return ThermostatRelation(
         source_sha256=source_sha256,
         prefix=prefix,
-        outside_temperature=outside,
+        fixed=fixed,
         proposal=proposed,
         current=current,
         next=next_,
@@ -462,7 +481,7 @@ def _build_relation(*, source_sha256: str, prefix: str, outside_temperature: Any
         outcome_tag=z3.If(completion, 0, 1),
         observation=(current.setpoint, current.sensor_temperature),
         next_observation=(next_.setpoint, next_.sensor_temperature),
-        reward=z3.If(completion, _real(z3, 1), _real(z3, Fraction(-1, 100))),
+        reward=z3.If(completion, fixed["stop_reward"], fixed["continue_reward"]),
         properties=properties,
         assumptions=CONTRACT_ASSUMPTIONS,
     )
@@ -673,15 +692,15 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
 
     z3 = _z3()
     source = extract_thermostat_relation(model_path, prefix="left_")
-    outside = z3.Real("outside_temperature")
+    fixed = _new_thermostat_fixed_context(z3)
     proposal = z3.Int("proposed_action")
     left = _build_relation(
         source_sha256=source.source_sha256,
         prefix="left_",
-        outside_temperature=outside,
+        fixed_parameters=fixed,
         proposal=proposal,
     )
-    right = source.renamed("right_", outside_temperature=outside, proposal=proposal)
+    right = source.renamed("right_", fixed=fixed, proposal=proposal)
     left_buffer = _new_buffer(z3, "left_")
     right_buffer = _new_buffer(z3, "right_")
     left_invariant = _buffer_invariant(z3, left, left_buffer)
@@ -702,7 +721,8 @@ def build_fixed_buffer_markov_query(model_path: str | Path | None = None) -> The
     )
     initial = _initial_buffer(z3, left, left_buffer)
     initial_empty = z3.And(
-        outside >= _real(z3, -10), outside <= _real(z3, 50),
+        fixed["outside_temperature"] >= _real(z3, -10),
+        fixed["outside_temperature"] <= _real(z3, 50),
         z3.Not(z3.Exists(left.current.expressions() + left_buffer.expressions(), initial)),
     )
     initial_contained = z3.And(initial, z3.Not(left_invariant))
@@ -742,6 +762,7 @@ __all__ = [
     "RESULT_SCHEMA",
     "SEMANTIC_PROFILE",
     "ThermostatPairedMarkovQuery",
+    "FixedProcessContext",
     "ThermostatRelation",
     "ThermostatVariables",
     "UnsupportedThermostatModel",

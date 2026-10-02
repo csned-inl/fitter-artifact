@@ -29,6 +29,13 @@ sensor, controller-visible, and actuator state. In particular, physical and
 sensor values must remain distinct symbols even when a model-specific invariant
 proves them equal at the selected decision epoch.
 
+Contract-fixed values are first-class named fields in a generic
+`FixedProcessContext` shared by both sides of the paired query. Each model
+declares its own finite field set; the container does not prescribe thermostat,
+cruise, or other model semantics. The fields are visible to the proof and
+certificate but are not added to the controller observation unless the source
+exposes them.
+
 ## 1. Representation problem and exact scope
 
 The mathematical specification in the SysML model is the primitive. The required representation must preserve the thermostat model's equations, inequalities, finite state, decision boundary, and query-relevant property roles without compiling or symbolically replaying a simulator.

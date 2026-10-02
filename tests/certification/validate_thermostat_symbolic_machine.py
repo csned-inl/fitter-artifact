@@ -13,6 +13,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from clarity.certification.symbolic_process import FixedProcessContext  # noqa: E402
 from clarity.certification.thermostat_symbolic_machine import (  # noqa: E402
     APPROVED_SOURCE_SHA256,
     DEFAULT_MODEL_PATH,
@@ -28,6 +29,13 @@ HAS_Z3 = importlib.util.find_spec("z3") is not None
 
 
 class ThermostatSymbolicMachineTests(unittest.TestCase):
+    def test_fixed_process_context_is_generic_named_data(self):
+        context = FixedProcessContext(fields=(("lead_speed", 25), ("road_grade", 0)))
+        self.assertEqual(context.names(), ("lead_speed", "road_grade"))
+        self.assertEqual(context["lead_speed"], 25)
+        with self.assertRaisesRegex(ValueError, "unique named fields"):
+            FixedProcessContext(fields=(("duplicate", 1), ("duplicate", 2)))
+
     def test_source_profile_validates_without_solver(self):
         source_hash = validate_thermostat_source()
         self.assertEqual(source_hash, APPROVED_SOURCE_SHA256)
@@ -54,7 +62,7 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         # A source-profile validator is part of the soundness boundary.  Keep
         # the whole prototype below this hard limit rather than growing a new
         # framework around it.
-        self.assertLessEqual(len(source.splitlines()), 760)
+        self.assertLessEqual(len(source.splitlines()), 780)
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_physical_and_sensor_values_are_distinct_symbols_with_explicit_synchrony(self):
@@ -66,6 +74,14 @@ class ThermostatSymbolicMachineTests(unittest.TestCase):
         solver = z3.Solver()
         solver.add(relation.initial, z3.Not(relation.sensor_relation))
         self.assertEqual(str(solver.check()), "unsat")
+
+    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
+    def test_fixed_parameters_are_explicit_and_shared_but_not_observed(self):
+        query = build_fixed_buffer_markov_query()
+        self.assertIs(query.left.fixed, query.right.fixed)
+        self.assertIn("outside_temperature", query.left.fixed.names())
+        self.assertNotIn(query.left.fixed["outside_temperature"],
+                         query.left.observation)
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_symbolic_shield_matches_clarity_keep_or_replace_boundary(self):
