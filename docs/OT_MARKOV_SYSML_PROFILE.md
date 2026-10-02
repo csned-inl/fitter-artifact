@@ -95,6 +95,22 @@ the supported structure, compilation returns `UNSUPPORTED_SEMANTICS`.
 The compiler MUST construct this relation directly from the parsed source. It
 MUST NOT run, encode, or symbolically recreate the general-purpose simulator.
 
+### Proof-preserving transition abstraction
+
+For the Markov theorem, the compiler need not hand Z3 the numerical body of a
+deterministic plant equation when its complete dependency signature has been
+checked. It MAY represent a successor observation component by one shared
+uninterpreted function of exactly its reconstructed current observations,
+fixed context, and executed action. Function congruence then proves that equal
+arguments produce equal successors for every numerical equation with that
+signature. This is a sound overapproximation for Markovity, not a simulation or
+a claim about a particular successor value.
+
+This abstraction is permitted only after the compiler has accounted for every
+source dependency and proved every hidden dynamic input reconstructible. A
+missing, ambiguous, or non-invertible dependency returns `UNSUPPORTED`; it is
+never omitted from the function signature.
+
 ## Proposed and executed actions
 
 The controller action is the tuple of Policy output values. Profile 0.1 accepts
@@ -144,6 +160,19 @@ non-Markov behavior.
 
 The candidate and its reconstruction evidence are recorded in the proof
 artifact. Candidate generation alone never certifies the Markov property.
+
+## Certified controller-facing result
+
+Profile 0.1 certifies the controller observation, completion result, executed
+action history when retained, and successor buffer. Ordinary Prohibition and
+Obligation declarations remain source safety specifications; they are not
+silently invented as rewards or controller outputs.
+
+When the SysML source does not define a reward, the certificate imposes the
+implementation condition that any downstream reward be a deterministic
+function only of the current certified buffer, proposal or executed action,
+completion, and successor observation. A reward that reads additional hidden
+state is outside the certificate and can make the implemented process non-MDP.
 
 ## Certificate obligations
 
