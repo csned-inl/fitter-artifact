@@ -20,6 +20,13 @@ There must be no network connection, remote shell, shared filesystem, or other c
 
 This bridge is an execution mechanism only. It does not change the Markov-certification goal, authorize simulator reconstruction, or change which repository is authoritative for SysML model semantics.
 
+This bridge is Tier 3 of the project's testing strategy. The work-side private
+VM handles immediate dependency-light checks, GitHub-hosted runners handle
+ordinary pinned CI and Z3 tests, and personal hardware handles only unavailable
+capabilities or materially heavy work. Because bridge dispatch has measurable
+fixed latency, combine related heavy checks into one request rather than using
+the bridge as an interactive shell.
+
 ## Hard boundaries
 
 - Never attempt to access the work laptop or its filesystem.
