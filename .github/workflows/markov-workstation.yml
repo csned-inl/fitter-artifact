@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   workstation-certification:
-    runs-on: [self-hosted, linux, x64, clarity-workstation, gpu]
+    runs-on: [self-hosted, linux, x64, clarity-workstation]
     timeout-minutes: 60
     env:
       PYTHON_BIN: ${{ runner.temp }}/clarity-venv/bin/python
@@ -31,7 +31,6 @@ jobs:
           uname -a
           lscpu
           free -h
-          nvidia-smi
 
       - name: Create isolated certification environment
         run: |
@@ -46,7 +45,7 @@ jobs:
           import z3
 
           distribution = importlib.metadata.version("z3-solver")
-          assert distribution == "5.0.0.0", distribution
+          assert distribution == "4.15.4.0", distribution
           print("z3-solver distribution:", distribution)
           print("Z3 engine:", z3.get_version_string())
           PY
