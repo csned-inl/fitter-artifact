@@ -172,6 +172,14 @@ class StructuralDiscretizationTests(unittest.TestCase):
         )
         self.assertIsNone(_certificate_for_text(source))
 
+    def test_unparsed_marked_requirement_is_not_silently_omitted(self):
+        source = MODELS["thermostat"].read_text().replace(
+            "requirement def 'Heat When Cold'",
+            "requirement malformed 'Heat When Cold'",
+            1,
+        )
+        self.assertIsNone(_certificate_for_text(source))
+
     def test_structural_checker_has_no_solver_or_simulator_dependency(self):
         source = (
             ROOT / "src/clarity/certification/structural_discretization.py"

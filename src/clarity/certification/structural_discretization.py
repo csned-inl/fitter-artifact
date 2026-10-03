@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from fractions import Fraction
 from itertools import combinations
 from pathlib import Path
+import re
 from typing import Iterable
 
 from clarity.sysml.parser import (
@@ -37,6 +38,30 @@ from .structural_markov import (
 
 
 PROFILE = "direct-sysml-structural-discretization-0.1"
+
+
+def _strip_sysml_comments(source: str) -> str:
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", source)
+
+
+def _validate_safety_inventory(model: OTMarkovModel) -> None:
+    """Fail if a marked source requirement was not represented by the parser."""
+
+    source = _strip_sysml_comments(Path(model.model_path).read_text())
+    markers = re.findall(r"#(?:Prohibition|Obligation)\b", source)
+    declarations = re.findall(
+        r"#(?:Prohibition|Obligation)\s+requirement\s+def\b", source
+    )
+    parsed = [
+        requirement for requirement in model.parser.parsed_requirements
+        if set(requirement.metadata) & {"Prohibition", "Obligation"}
+    ]
+    if len(markers) != len(declarations) or len(declarations) != len(parsed):
+        raise UnsupportedOTProfile(
+            "INCOMPLETE_SAFETY_INVENTORY",
+            "every marked source safety requirement must parse exactly once",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,6 +582,7 @@ def compile_structural_discretization_obligations(
     """Compile only obligations discharged by the structural proof rules."""
 
     model = compile_ot_model(model_path)
+    _validate_safety_inventory(model)
     policy = _policy_is_total_function(model)
     if policy is None:
         raise UnsupportedOTProfile(
