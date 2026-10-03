@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   workstation-certification:
-    runs-on: [self-hosted, linux, x64, clarity-workstation]
+    runs-on: [self-hosted, linux, x64, clarity-workstation, gpu]
     timeout-minutes: 60
     env:
       PYTHON_BIN: ${{ runner.temp }}/clarity-venv/bin/python
@@ -31,6 +31,7 @@ jobs:
           uname -a
           lscpu
           free -h
+          nvidia-smi
 
       - name: Create isolated certification environment
         run: |
@@ -45,13 +46,16 @@ jobs:
           import z3
 
           distribution = importlib.metadata.version("z3-solver")
-          assert distribution == "4.15.4.0", distribution
+          assert distribution == "5.0.0.0", distribution
           print("z3-solver distribution:", distribution)
           print("Z3 engine:", z3.get_version_string())
           PY
 
       - name: Run structural fast-path tests
         run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_structural_markov.py -v
+
+      - name: Run structural discretization-safety tests
+        run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_structural_discretization.py -v
 
       - name: Run controller-class analysis tests
         run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_controller_class_analysis.py -v
