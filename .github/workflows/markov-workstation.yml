@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   workstation-certification:
-    runs-on: [self-hosted, linux, x64, clarity-workstation, gpu]
+    runs-on: [self-hosted, linux, x64, clarity-workstation]
     timeout-minutes: 60
     env:
       PYTHON_BIN: ${{ runner.temp }}/clarity-venv/bin/python
@@ -31,7 +31,6 @@ jobs:
           uname -a
           lscpu
           free -h
-          nvidia-smi
 
       - name: Create isolated certification environment
         run: |
