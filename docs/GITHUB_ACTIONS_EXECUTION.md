@@ -7,6 +7,9 @@ THE PLAN IS TO GIVE THE MINIMAL AMOUNT OF INFORMATION TO Z3 TO PROVE THE BUFFERE
 The project has three deliberately separate execution tiers. No tier
 changes the source-authority rule or authorizes simulator reconstruction.
 
+Project-neutral guidance that can be handed to other agents is in
+`docs/AGENT_COMPUTE_RESOURCE_GUIDE.md`.
+
 The design and personal-side setup contract for a GitHub-mediated runner loop
 are in `docs/PERSONAL_RUNNER_BRIDGE_HANDOFF.md`. That bridge keeps GitHub as the
 only rendezvous point between the work-side agent and personal compute; it does
