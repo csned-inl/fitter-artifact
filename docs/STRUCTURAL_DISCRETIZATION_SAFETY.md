@@ -80,6 +80,11 @@ The associated tests also compare the actual Boolean normalization, interval
 contradiction, and unit-Farkas implementations against the explicit logic.
 See `docs/SYMBOLIC_PROCESS_LOGIC.md` for the precise language and trust boundary.
 
+This general method validation is not executed by the per-model
+discretization command. It is combined with the buffered-Markov method checks
+in `scripts/validate_symbolic_methods.py` and runs only in the dedicated,
+path-filtered symbolic-method validation workflow.
+
 Current adversarial mutations include inverted actuator receive assignments,
 wrong ON/OFF payloads, command addresses rejected by the receiver guard,
 missing scenario inequalities, false safety requirements, and requirements

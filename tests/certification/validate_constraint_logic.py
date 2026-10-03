@@ -12,19 +12,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clarity.sysml.parser import (  # noqa: E402
-    BinaryExpr,
-    LiteralExpr,
-    RefExpr,
-    UnaryExpr,
-)
 from clarity.certification.constraint_logic import (  # noqa: E402
     LOGIC_PROFILE,
     LogicSequent,
     LogicSort,
     apply,
-    compile_expression,
-    conjunction,
     literal,
     lower_to_z3,
     symbol,
@@ -32,17 +24,15 @@ from clarity.certification.constraint_logic import (  # noqa: E402
 from clarity.certification.discretization_semantic_validation import (  # noqa: E402
     compile_structural_discretization_logic,
 )
+from clarity.certification.markov_logic import (  # noqa: E402
+    build_markov_logic_query,
+)
+from clarity.certification.markov_rule_validation import (  # noqa: E402
+    markov_rule_schemas,
+)
 from clarity.certification.ot_markov import compile_ot_model  # noqa: E402
-from clarity.certification.structural_discretization import (  # noqa: E402
-    _unit_farkas_contradiction,
-)
-from clarity.certification.structural_markov import (  # noqa: E402
-    _clause_contradiction,
-    _dnf,
-)
 from clarity.certification.structural_rule_validation import (  # noqa: E402
     structural_rule_schemas,
-    validate_structural_rule_schemas,
 )
 
 
@@ -52,47 +42,6 @@ MODELS = (
     ROOT / "tests/fixtures/standalone/cruise-controller-model.sysml",
 )
 HAS_Z3 = importlib.util.find_spec("z3") is not None
-
-
-def _logic_environment(model):
-    observation = {
-        field.name: symbol("test::obs::" + field.name, LogicSort.REAL)
-        for field in model.observation
-    }
-    return observation
-
-
-def _compile_formula(model, expression):
-    return compile_expression(
-        model,
-        expression,
-        observation=_logic_environment(model),
-        action={},
-        prior_action={},
-        scenario={},
-        context=model.controller_fqn,
-    )
-
-
-def _from_dnf(clauses):
-    if not clauses:
-        return LiteralExpr(False)
-    disjuncts = []
-    for clause in clauses:
-        if not clause:
-            disjuncts.append(LiteralExpr(True))
-            continue
-        atoms = [UnaryExpr("not", item) if negate else item
-                 for item, negate in clause]
-        value = atoms[0]
-        for atom in atoms[1:]:
-            value = BinaryExpr("and", value, atom)
-        disjuncts.append(value)
-    result = disjuncts[0]
-    for disjunct in disjuncts[1:]:
-        result = BinaryExpr("or", result, disjunct)
-    return result
-
 
 class ConstraintLogicTests(unittest.TestCase):
     def test_logic_ir_is_typed_and_rejects_invalid_terms(self):
@@ -128,12 +77,34 @@ class ConstraintLogicTests(unittest.TestCase):
         self.assertIn("unit-farkas-strict-width-4", names)
         self.assertEqual(len(names), len(structural_rule_schemas()))
 
-    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
-    def test_z3_refutes_every_rule_schema_counterexample(self):
-        result = validate_structural_rule_schemas()
-        self.assertEqual(result["classification"], "VALIDATED", result)
-        self.assertTrue(result["rules"])
-        self.assertTrue(all(item["result"] == "unsat" for item in result["rules"]))
+    def test_all_current_markov_obligations_have_explicit_logic(self):
+        for path in MODELS:
+            query = build_markov_logic_query(compile_ot_model(path))
+            self.assertEqual(
+                set(query.sequents()),
+                {"initialization", "shield_totality", "shield_uniqueness", "markov"},
+            )
+            self.assertTrue(all(
+                len(sequent.fingerprint()) == 64
+                for sequent in query.sequents().values()
+            ))
+
+    def test_markov_rule_schema_inventory_covers_factorization(self):
+        names = {schema.name for schema in markov_rule_schemas()}
+        self.assertIn("keep-or-replace-execution-is-congruent", names)
+        self.assertIn("successor-function-congruence", names)
+        self.assertIn("paired-result-factorization", names)
+
+    def test_model_entry_points_do_not_invoke_method_validation(self):
+        paths = (
+            ROOT / "scripts/certify_discretization.py",
+            ROOT / "scripts/prove_markov.py",
+            ROOT / "src/clarity/certification/ot_markov.py",
+            ROOT / "src/clarity/certification/structural_markov.py",
+        )
+        for path in paths:
+            with self.subTest(path=path.name):
+                self.assertNotIn("validate_symbolic_proof_methods", path.read_text())
 
     @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
     def test_rule_validation_is_not_vacuous(self):
@@ -149,99 +120,6 @@ class ConstraintLogicTests(unittest.TestCase):
         solver = z3.Solver()
         solver.add(lower_to_z3(broken.counterexample(), z3))
         self.assertEqual(str(solver.check()), "sat")
-
-    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
-    def test_dnf_implementation_preserves_logical_meaning(self):
-        import z3
-
-        model = compile_ot_model(MODELS[0])
-        temperature = RefExpr([model.policy_subject, "temperatureCelcius"])
-        set_point = RefExpr([model.policy_subject, "setPoint"])
-        atoms = (
-            BinaryExpr("<", temperature, LiteralExpr(0.0)),
-            BinaryExpr(">=", temperature, set_point),
-            BinaryExpr("<=", set_point, LiteralExpr(25.0)),
-        )
-        formulas = (
-            BinaryExpr("implies", atoms[0], BinaryExpr("or", atoms[1], atoms[2])),
-            UnaryExpr("not", BinaryExpr("and", atoms[0], atoms[1])),
-            BinaryExpr(
-                "and",
-                BinaryExpr("or", atoms[0], atoms[1]),
-                BinaryExpr("or", UnaryExpr("not", atoms[0]), atoms[2]),
-            ),
-        )
-        for formula in formulas:
-            with self.subTest(formula=repr(formula)):
-                clauses = _dnf(formula)
-                self.assertIsNotNone(clauses)
-                rebuilt = _from_dnf(clauses)
-                equivalent = LogicSequent((), apply(
-                    "eq", _compile_formula(model, formula),
-                    _compile_formula(model, rebuilt),
-                ))
-                solver = z3.Solver()
-                solver.add(lower_to_z3(equivalent.counterexample(), z3))
-                self.assertEqual(str(solver.check()), "unsat")
-
-    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
-    def test_every_accepted_interval_contradiction_is_semantically_impossible(self):
-        import z3
-
-        model = compile_ot_model(MODELS[0])
-        variable = RefExpr([model.policy_subject, "temperatureCelcius"])
-        accepted = 0
-        atoms = [
-            BinaryExpr(operation, variable, LiteralExpr(float(threshold)))
-            for operation in (">", ">=", "<", "<=", "==")
-            for threshold in (-1, 0, 1)
-        ]
-        for index, left in enumerate(atoms):
-            for right in atoms[index + 1:]:
-                clause = ((left, False), (right, False))
-                if not _clause_contradiction(model, clause, model.controller_fqn):
-                    continue
-                accepted += 1
-                sequent = LogicSequent(
-                    (_compile_formula(model, left), _compile_formula(model, right)),
-                    literal(False),
-                )
-                solver = z3.Solver()
-                solver.add(lower_to_z3(sequent.counterexample(), z3))
-                self.assertEqual(str(solver.check()), "unsat", clause)
-        self.assertGreater(accepted, 0)
-
-    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
-    def test_accepted_unit_farkas_applications_are_semantically_impossible(self):
-        import z3
-
-        model = compile_ot_model(MODELS[0])
-        x = RefExpr([model.policy_subject, "temperatureCelcius"])
-        y = RefExpr([model.policy_subject, "setPoint"])
-        neg_x = BinaryExpr("*", LiteralExpr(-1), x)
-        neg_y = BinaryExpr("*", LiteralExpr(-1), y)
-        clauses = (
-            (
-                (BinaryExpr("<=", x, LiteralExpr(0)), False),
-                (BinaryExpr("<", neg_x, LiteralExpr(0)), False),
-            ),
-            (
-                (BinaryExpr("<=", BinaryExpr("+", x, y), LiteralExpr(1)), False),
-                (BinaryExpr("<=", neg_x, LiteralExpr(-1)), False),
-                (BinaryExpr("<", neg_y, LiteralExpr(0)), False),
-            ),
-        )
-        for clause in clauses:
-            self.assertTrue(
-                _unit_farkas_contradiction(model, clause, model.controller_fqn)
-            )
-            premises = tuple(_compile_formula(model, predicate)
-                             for predicate, _negate in clause)
-            sequent = LogicSequent(premises, literal(False))
-            solver = z3.Solver()
-            solver.add(lower_to_z3(sequent.counterexample(), z3))
-            self.assertEqual(str(solver.check()), "unsat")
-
 
 if __name__ == "__main__":
     unittest.main()

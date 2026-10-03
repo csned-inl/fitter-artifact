@@ -18,9 +18,6 @@ from clarity.certification.discretization_semantic_validation import (  # noqa: 
 from clarity.certification.structural_discretization import (  # noqa: E402
     prove_discretization_structurally,
 )
-from clarity.certification.structural_rule_validation import (  # noqa: E402
-    validate_structural_rule_schemas,
-)
 
 
 def main() -> int:
@@ -38,9 +35,6 @@ def main() -> int:
         "structural": prove_discretization_structurally(args.model),
     }
     if args.validate_z3:
-        result["proof_rule_validation"] = validate_structural_rule_schemas(
-            timeout_ms=args.timeout_ms
-        )
         result["semantic_validation"] = (
             validate_structural_discretization_semantically(
                 args.model, timeout_ms=args.timeout_ms
@@ -52,14 +46,10 @@ def main() -> int:
     if structural.get("classification") != "CERTIFIED_STRUCTURALLY":
         return 2
     if args.validate_z3:
-        rules = result["proof_rule_validation"]
-        assert isinstance(rules, dict)
-        if rules.get("classification") != "VALIDATED":
-            return 3
         semantic = result["semantic_validation"]
         assert isinstance(semantic, dict)
         if semantic.get("classification") != "VALIDATED":
-            return 4
+            return 3
     return 0
 
 

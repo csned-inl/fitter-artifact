@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import hashlib
 from pathlib import Path
 import tempfile
@@ -14,9 +13,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from clarity.certification.discretization_semantic_validation import (  # noqa: E402
-    validate_structural_discretization_semantically,
-)
 from clarity.certification.ot_markov import compile_ot_model  # noqa: E402
 from clarity.certification.structural_discretization import (  # noqa: E402
     try_prove_discretization_structurally,
@@ -48,7 +44,6 @@ EXPECTED_PROPERTIES = {
         "Brake When Above Target Or Too Close",
     },
 }
-HAS_Z3 = importlib.util.find_spec("z3") is not None
 SOURCE_IDENTITIES = {
     "thermostat": (
         "820df2a56af2d3a9fe54855e15a4da034ae3750b",
@@ -197,18 +192,6 @@ class StructuralDiscretizationTests(unittest.TestCase):
         self.assertNotIn("package_name ==", source)
         for package_name in ("Thermostat", "TankFillingSystem", "CruiseControl"):
             self.assertNotIn(package_name, source)
-
-    @unittest.skipUnless(HAS_Z3, "pinned z3-solver unavailable")
-    def test_z3_refutes_every_structural_property_counterexample(self):
-        for name, path in MODELS.items():
-            with self.subTest(name=name):
-                result = validate_structural_discretization_semantically(path)
-                self.assertEqual(result["classification"], "VALIDATED", result)
-                self.assertTrue(result["obligations"])
-                self.assertTrue(all(
-                    item["result"] == "unsat" for item in result["obligations"]
-                ))
-
 
 if __name__ == "__main__":
     unittest.main()

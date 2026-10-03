@@ -19,6 +19,14 @@ solver-free, while an independent solver checks both:
 This creates a precise boundary between the source parser, the symbolic
 checker, the logical claim, and the solver backend.
 
+There are two deliberately separate executions:
+
+1. **Model certification:** accept one SysML model, translate its symbolic
+   process into logic, and produce or reject that model's certificate.
+2. **Method validation:** independently check the general logical rule schemas
+   and the implementation of those rules. This is run when the logic,
+   translation, or positive proof rules change—not for every model invocation.
+
 ## Logic
 
 `src/clarity/certification/constraint_logic.py` defines a solver-independent,
@@ -90,6 +98,30 @@ The test suite also exercises the checker implementation itself:
 - a deliberately weakened interval rule must be satisfiable, showing that the
   validation is not vacuous.
 
+The buffered-Markov schemas additionally cover functional action definitions,
+identity and keep-or-replace execution, completion and successor congruence,
+and composition of the paired Markov result. The model-specific Markov
+fallback now emits four explicit sequents: initialization nonemptiness, shield
+totality, shield uniqueness, and paired successor factorization.
+
+## Execution separation
+
+Neither `scripts/prove_markov.py` nor `scripts/certify_discretization.py`
+invokes the general method validator.
+
+The single combined method check is:
+
+```bash
+PYTHONPATH=src python scripts/validate_symbolic_methods.py
+```
+
+It validates all discretization and buffered-Markov rule schemas, checks the
+actual DNF/interval/Farkas implementations against their logical meaning,
+checks the reviewed positive instances, and runs a deliberately invalid
+negative control. Its dedicated GitHub workflow is
+`.github/workflows/symbolic-method-validation.yml`; path filters run it only
+when the logic, checker, validation program, or its reviewed fixtures change.
+
 ## Exact guarantee and trust boundary
 
 This work verifies the post-parse logic we claim and checks that the current
@@ -111,14 +143,14 @@ trusted boundary further.
 
 ## Commands
 
-Run the logic and rule-validation suite:
+Run lightweight construction and separation tests:
 
 ```bash
 PYTHONPATH=src python tests/certification/validate_constraint_logic.py -v
 ```
 
-Generate a structural certificate, validate the proof-rule schemas, and
-validate the model-specific logical sequents with Z3:
+Generate a structural certificate and optionally validate only that model's
+logical sequents with Z3:
 
 ```bash
 PYTHONPATH=src python scripts/certify_discretization.py \

@@ -162,19 +162,32 @@ def validate_structural_rule_schemas(
 ) -> dict[str, object]:
     """Ask Z3 to refute a counterexample to every proof-rule schema."""
 
+    return validate_rule_schemas(
+        structural_rule_schemas(), profile=RULE_PROFILE, timeout_ms=timeout_ms
+    )
+
+
+def validate_rule_schemas(
+    schemas: tuple[RuleSchema, ...],
+    *,
+    profile: str,
+    timeout_ms: int = 5_000,
+) -> dict[str, object]:
+    """Validate one explicit collection of semantic rule schemas."""
+
     try:
         import z3
     except ImportError as exc:  # pragma: no cover - runner dependency
         return {
             "classification": "NOT_VALIDATED",
-            "profile": RULE_PROFILE,
+            "profile": profile,
             "logic_profile": LOGIC_PROFILE,
             "reason": "solver_unavailable",
             "detail": str(exc),
         }
 
     results: list[RuleValidationResult] = []
-    for schema in structural_rule_schemas():
+    for schema in schemas:
         solver = z3.Solver()
         solver.set(timeout=timeout_ms)
         solver.add(lower_to_z3(schema.sequent.counterexample(), z3))
@@ -191,7 +204,7 @@ def validate_structural_rule_schemas(
     passed = bool(results) and all(item.result == "unsat" for item in results)
     return {
         "classification": "VALIDATED" if passed else "NOT_VALIDATED",
-        "profile": RULE_PROFILE,
+        "profile": profile,
         "logic_profile": LOGIC_PROFILE,
         "meaning": (
             "no semantic counterexample exists for any stated structural "
@@ -206,5 +219,6 @@ __all__ = [
     "RuleSchema",
     "RuleValidationResult",
     "structural_rule_schemas",
+    "validate_rule_schemas",
     "validate_structural_rule_schemas",
 ]

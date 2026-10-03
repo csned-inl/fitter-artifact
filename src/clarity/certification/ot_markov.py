@@ -827,11 +827,15 @@ def build_markov_query(model: OTMarkovModel) -> OTMarkovQuery:
 
 
 def prove_markov(model_path: str | Path, *, timeout_ms: int = 5_000) -> dict[str, object]:
-    """Compile one supplied model, derive its buffer, and run its Z3 proof."""
+    """Compile one supplied model and check its explicit logical obligations."""
 
     try:
         model = compile_ot_model(model_path)
-        query = build_markov_query(model)
+        # Import lazily to keep the source compiler independent of solver and
+        # logic backends while preserving the public one-model entry point.
+        from .markov_logic import build_markov_logic_query
+
+        query = build_markov_logic_query(model)
         result = query.run(timeout_ms=timeout_ms)
         return {"model": model.summary(), **result}
     except UnsupportedOTProfile as exc:

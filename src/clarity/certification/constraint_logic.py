@@ -57,6 +57,10 @@ class LogicTerm:
             if not self.name or self.args or self.value is not None:
                 raise ValueError("a symbol requires only a nonempty name")
             return
+        if self.op == "function":
+            if not self.name or self.value is not None:
+                raise ValueError("a function application requires a nonempty name")
+            return
         if self.op == "literal":
             if self.name is not None or self.args:
                 raise ValueError("a literal cannot have a name or arguments")
@@ -74,7 +78,7 @@ class LogicTerm:
 
     def as_dict(self) -> dict[str, object]:
         result: dict[str, object] = {"op": self.op, "sort": self.sort.value}
-        if self.name is not None:
+        if self.op == "symbol":
             result["name"] = self.name
         elif self.op == "literal":
             result["value"] = (
@@ -82,6 +86,9 @@ class LogicTerm:
                 if type(self.value) is bool
                 else f"{self.value.numerator}/{self.value.denominator}"
             )
+        elif self.op == "function":
+            result["name"] = self.name
+            result["args"] = tuple(item.as_dict() for item in self.args)
         else:
             result["args"] = tuple(item.as_dict() for item in self.args)
         return result
@@ -93,6 +100,12 @@ def _require_arity(op: str, args: tuple[LogicTerm, ...], arity: int) -> None:
 
 
 def _check_application(op: str, sort: LogicSort, args: tuple[LogicTerm, ...]) -> None:
+    if op == "exists":
+        if len(args) < 2 or any(item.op != "symbol" for item in args[:-1]):
+            raise ValueError("exists requires bound symbols followed by a body")
+        if sort is not LogicSort.BOOL or args[-1].sort is not LogicSort.BOOL:
+            raise ValueError("exists body and result must be Bool")
+        return
     if op == "not":
         _require_arity(op, args, 1)
         if sort is not LogicSort.BOOL or args[0].sort is not LogicSort.BOOL:
@@ -173,7 +186,10 @@ def literal(value: bool | int | float | Fraction) -> LogicTerm:
 
 def apply(op: str, *args: LogicTerm) -> LogicTerm:
     values = tuple(args)
-    if op in {"not", "and", "or", "implies", "eq", "lt", "le", "gt", "ge"}:
+    if op in {
+        "exists", "not", "and", "or", "implies", "eq",
+        "lt", "le", "gt", "ge",
+    }:
         sort = LogicSort.BOOL
     elif op == "neg":
         sort = values[0].sort
@@ -194,6 +210,12 @@ def apply(op: str, *args: LogicTerm) -> LogicTerm:
     else:
         raise ValueError(f"unsupported logic operator {op}")
     return LogicTerm(op, sort, values)
+
+
+def function(name: str, result_sort: LogicSort, *args: LogicTerm) -> LogicTerm:
+    """Apply an uninterpreted function with a result and argument signature."""
+
+    return LogicTerm("function", result_sort, tuple(args), name=name)
 
 
 def conjunction(items: Iterable[LogicTerm]) -> LogicTerm:
@@ -230,12 +252,18 @@ class LogicSequent:
         if self.conclusion.sort is not LogicSort.BOOL:
             raise ValueError("a sequent conclusion must be Bool")
         seen: dict[str, LogicSort] = {}
+        seen_functions: dict[str, tuple[tuple[LogicSort, ...], LogicSort]] = {}
         for term in self.premises + (self.conclusion,):
             for name, sort in symbols_in(term).items():
                 previous = seen.get(name)
                 if previous is not None and previous is not sort:
                     raise ValueError(f"symbol {name} has conflicting sorts")
                 seen[name] = sort
+            for name, signature in functions_in(term).items():
+                previous_signature = seen_functions.get(name)
+                if previous_signature is not None and previous_signature != signature:
+                    raise ValueError(f"function {name} has conflicting signatures")
+                seen_functions[name] = signature
 
     def counterexample(self) -> LogicTerm:
         return conjunction(self.premises + (apply("not", self.conclusion),))
@@ -264,6 +292,26 @@ def symbols_in(term: LogicTerm) -> dict[str, LogicSort]:
             if previous is not None and previous is not item.sort:
                 raise ValueError(f"symbol {item.name} has conflicting sorts")
             result[item.name] = item.sort
+        for argument in item.args:
+            visit(argument)
+
+    visit(term)
+    return result
+
+
+def functions_in(
+    term: LogicTerm,
+) -> dict[str, tuple[tuple[LogicSort, ...], LogicSort]]:
+    result: dict[str, tuple[tuple[LogicSort, ...], LogicSort]] = {}
+
+    def visit(item: LogicTerm) -> None:
+        if item.op == "function":
+            assert item.name is not None
+            signature = (tuple(argument.sort for argument in item.args), item.sort)
+            previous = result.get(item.name)
+            if previous is not None and previous != signature:
+                raise ValueError(f"function {item.name} has conflicting signatures")
+            result[item.name] = signature
         for argument in item.args:
             visit(argument)
 
@@ -406,7 +454,7 @@ def _coerce_z3_numeric(z3: Any, value: Any, source: LogicSort, target: LogicSort
 def lower_to_z3(
     term: LogicTerm,
     z3: Any,
-    symbols: dict[str, Any] | None = None,
+    symbols: dict[object, Any] | None = None,
 ) -> Any:
     """Lower the solver-independent logical IR to Z3 expressions."""
 
@@ -429,7 +477,28 @@ def lower_to_z3(
             return z3.IntVal(term.value.numerator)
         return z3.RealVal(f"{term.value.numerator}/{term.value.denominator}")
 
+    if term.op == "function":
+        assert term.name is not None
+        key = (
+            "function", term.name,
+            tuple(argument.sort.value for argument in term.args), term.sort.value,
+        )
+        if key not in cache:
+            sort_constructors = {
+                LogicSort.BOOL: z3.BoolSort,
+                LogicSort.INT: z3.IntSort,
+                LogicSort.REAL: z3.RealSort,
+            }
+            cache[key] = z3.Function(
+                term.name,
+                *(sort_constructors[item.sort]() for item in term.args),
+                sort_constructors[term.sort](),
+            )
+        return cache[key](*(lower_to_z3(item, z3, cache) for item in term.args))
+
     values = [lower_to_z3(item, z3, cache) for item in term.args]
+    if term.op == "exists":
+        return z3.Exists(values[:-1], values[-1])
     if term.op == "not":
         return z3.Not(values[0])
     if term.op == "neg":
@@ -482,6 +551,8 @@ __all__ = [
     "compile_scenario_domain",
     "conjunction",
     "disjunction",
+    "function",
+    "functions_in",
     "literal",
     "lower_to_z3",
     "sort_from_sysml",
