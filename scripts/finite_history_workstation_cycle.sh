@@ -74,7 +74,7 @@ fi
 PYTHON_BIN="$REPO_ROOT/.venv-finite-history/bin/python"
 if [[ -x "$PYTHON_BIN" ]] && "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
 import importlib.metadata
-raise SystemExit(importlib.metadata.version("z3-solver") != "5.0.0.0")
+raise SystemExit(importlib.metadata.version("z3-solver") != "4.15.4.0")
 PY
 then
   PREFLIGHT_ARGS=()

@@ -42,8 +42,8 @@ already-satisfied packages to reinstall. Machine-readable evidence is written
 under the git-ignored `runs/` directory. Installation failures remain failures;
 the script does not substitute another Z3 version.
 
-The Z3 Python API reports the engine version (`5.0.0`) while package metadata
-reports the pinned distribution version (`5.0.0.0`). Readiness is checked
+The Z3 Python API reports the engine version (`4.15.4`) while package metadata
+reports the pinned distribution version (`4.15.4.0`). Readiness is checked
 against the distribution version; both values are retained in the report.
 
 To inspect the machine without changing the Python environment:

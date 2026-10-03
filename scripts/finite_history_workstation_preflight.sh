@@ -127,7 +127,7 @@ report = {
     "z3_distribution_version": z3_distribution,
     "z3_python_import_error": z3_import_error,
     "z3_binary_version": z3_binary,
-    "z3_required_version": "5.0.0.0",
+    "z3_required_version": "4.15.4.0",
     "markov_z3_module_present": importlib.util.find_spec(
         "clarity.certification.markov_z3"
     ) is not None,
