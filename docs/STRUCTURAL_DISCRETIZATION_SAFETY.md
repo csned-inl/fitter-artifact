@@ -55,8 +55,10 @@ search or a heuristic approximation.
 
 ## Independent semantic validation
 
-`discretization_semantic_validation.py` reconstructs each compiled
-counterexample independently in Z3:
+`constraint_logic.py` first translates each accepted symbolic obligation into
+the explicit typed logic profile `ot-constraint-logic-0.1`.
+`discretization_semantic_validation.py` then lowers each logical sequent to Z3
+and asks for its counterexample:
 
 ```text
 source scenario domain
@@ -71,6 +73,12 @@ unavailable solver means `NOT_VALIDATED`. This cross-check validates the
 Boolean and arithmetic consequence after mapping. Source-mapping soundness is
 tested separately with semantic mutations because reusing the same mapping in
 both paths would not independently detect an omitted or inverted source edge.
+
+`structural_rule_validation.py` separately gives the structural rules their
+own semantic schemas and asks Z3 to refute a counterexample to each schema.
+The associated tests also compare the actual Boolean normalization, interval
+contradiction, and unit-Farkas implementations against the explicit logic.
+See `docs/SYMBOLIC_PROCESS_LOGIC.md` for the precise language and trust boundary.
 
 Current adversarial mutations include inverted actuator receive assignments,
 wrong ON/OFF payloads, command addresses rejected by the receiver guard,

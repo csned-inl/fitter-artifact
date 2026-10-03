@@ -56,6 +56,9 @@ jobs:
       - name: Run structural discretization-safety tests
         run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_structural_discretization.py -v
 
+      - name: Run symbolic-logic and proof-rule validation tests
+        run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_constraint_logic.py -v
+
       - name: Run controller-class analysis tests
         run: PYTHONPATH=src "$PYTHON_BIN" tests/certification/validate_controller_class_analysis.py -v
 
