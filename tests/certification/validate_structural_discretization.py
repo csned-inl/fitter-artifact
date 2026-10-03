@@ -148,6 +148,14 @@ class StructuralDiscretizationTests(unittest.TestCase):
         )
         self.assertIsNone(_certificate_for_text(source))
 
+    def test_ambiguous_actuator_receive_transition_is_not_certified(self):
+        source = MODELS["mixing"].read_text().replace(
+            "accept req : ModbusReqMsg via modbusPort.req",
+            "accept req : WriteCoilReqMsg via modbusPort.req",
+            1,
+        )
+        self.assertIsNone(_certificate_for_text(source))
+
     def test_missing_scenario_inequality_is_not_silently_assumed(self):
         source = MODELS["mixing"].read_text().replace(
             "controller.tank1OriginalLevelMl >= controller.tank1TransferMl and",

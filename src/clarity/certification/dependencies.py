@@ -409,6 +409,14 @@ class SysMLModel:
                             self.nsupp[tk] = {tk}
                             self.action_effects.pop(tk, None)
                             self.checked_copies.discard(tk)
+                        elif (
+                            tk in self.action_effects
+                            and self.action_effects[tk] != effect
+                        ):
+                            self._invalid_action_effect_targets.add(tk)
+                            self.nsupp[tk] = {tk}
+                            self.action_effects.pop(tk, None)
+                            self.checked_copies.discard(tk)
                         elif tk not in self._invalid_action_effect_targets:
                             deps = self._collect_refs(effect, self.ctrl_fqn.split("::"))
                             self.nsupp[tk] = deps or {tk}
@@ -439,7 +447,18 @@ class SysMLModel:
             and isinstance(assignment.expr, RefExpr)
             and len(assignment.expr.path) >= 2
             and assignment.expr.path[0] == transition.trigger_var
+            and transition.from_state == transition.to_state
         ):
+            return None
+        state_machine = next((
+            machine for fqn, machine in self.p.instance_state_machines.items()
+            if fqn.split("::")[-1] == inst
+        ), None)
+        if state_machine is None or sum(
+            candidate.trigger == transition.trigger
+            and candidate.trigger_port == trig_port
+            for candidate in state_machine.transitions
+        ) != 1:
             return None
         payload_field = assignment.expr.path[-1]
         ctrl_port = cmap.get(self._canon([inst, trig_port.split(".")[0]]))
