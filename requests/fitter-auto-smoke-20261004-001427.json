@@ -1,0 +1,8 @@
+{
+  "request_id": "fitter-auto-smoke-20261004-001427",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95"
+  },
+  "command": "set -euo pipefail\nprintf 'runner-smoke-ok\\n'\nuname -m\npython3 --version\ntest -f scripts/validate_symbolic_methods.py\nprintf 'source-archive-ok\\n'"
+}
