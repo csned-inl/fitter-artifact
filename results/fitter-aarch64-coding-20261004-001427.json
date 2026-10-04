@@ -1,0 +1,12 @@
+{
+  "coordinator": "ubuntu-blink",
+  "exit_code": 1,
+  "repository": "csned-inl/fitter-artifact",
+  "request_id": "fitter-aarch64-coding-20261004-001427",
+  "resolved_sha": "fe67d2ea4df66f929b7529e458c38e57c4d89b95",
+  "schema": "clarity.compute.result.v1",
+  "source_commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95",
+  "stderr_tail": "",
+  "stdout_tail": "The virtual environment was not created successfully because ensurepip is not\navailable.  On Debian/Ubuntu systems, you need to install the python3-venv\npackage using the following command.\n\n    apt install python3.14-venv\n\nYou may need to use sudo with that command.  After installing the python3-venv\npackage, recreate your virtual environment.\n\nFailing command: /home/csned/clarity-jobs/c91ad452e90a4f68405125c1/.compute-venv/bin/python3\n\n",
+  "worker": "5node0"
+}
