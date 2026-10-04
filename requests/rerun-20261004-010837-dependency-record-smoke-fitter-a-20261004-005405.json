@@ -1,0 +1,15 @@
+{
+  "command": "printf \"dependency-record-smoke-ok\\n\"",
+  "inputs": {
+    "commit": "77494663012487cad802bb4b99ee940e39d43010",
+    "repository": "csned-inl/fitter-artifact"
+  },
+  "request_id": "rerun-20261004-010837-dependency-record-smoke-fitter-a-20261004-005405",
+  "rerun_of": "dependency-record-smoke-fitter-a-20261004-005405",
+  "resources": {
+    "architecture": "x86_64",
+    "min_cpus": 1,
+    "min_memory_mb": 128,
+    "worker": "ubuntu-blink"
+  }
+}
