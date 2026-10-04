@@ -1,0 +1,12 @@
+{
+  "coordinator": "ubuntu-blink",
+  "exit_code": 0,
+  "repository": "csned-inl/fitter-artifact",
+  "request_id": "dependency-record-smoke-fitter-a-20261004-005405",
+  "resolved_sha": "77494663012487cad802bb4b99ee940e39d43010",
+  "schema": "clarity.compute.result.v1",
+  "source_commit": "77494663012487cad802bb4b99ee940e39d43010",
+  "stderr_tail": "",
+  "stdout_tail": "dependency-record-smoke-ok\n",
+  "worker": "ubuntu-blink"
+}
