@@ -1,0 +1,15 @@
+{
+  "command": "set -euo pipefail\npython3 -c \"import z3, numpy, scipy, yaml, torch; print(z3.get_version_string(), numpy.__version__, scipy.__version__, yaml.__version__, torch.__version__)\"\npython3 -m venv .compute-venv\n. .compute-venv/bin/activate\npython -m pip install --disable-pip-version-check --quiet --requirement requirements-ci.txt\nPYTHONPATH=src python tests/certification/validate_ot_markov_pipeline.py -v\nprintf \"dependency-sweep-fitter-ok\\n\"",
+  "inputs": {
+    "commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95",
+    "repository": "csned-inl/fitter-artifact"
+  },
+  "request_id": "rerun-20261004-010837-dependency-sweep-pi5-fitter-20261004-003839",
+  "rerun_of": "dependency-sweep-pi5-fitter-20261004-003839",
+  "resources": {
+    "architecture": "aarch64",
+    "min_cpus": 4,
+    "min_memory_mb": 2000,
+    "worker": "5node0"
+  }
+}
