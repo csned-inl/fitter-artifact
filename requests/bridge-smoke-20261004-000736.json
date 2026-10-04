@@ -1,0 +1,14 @@
+{
+  "request_id": "bridge-smoke-20261004-000736",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "f968a86bdc311da783b5ad81400e523047b31827"
+  },
+  "resources": {
+    "worker": "ubuntu-blink",
+    "architecture": "x86_64",
+    "min_cpus": 1,
+    "min_memory_mb": 128
+  },
+  "command": "printf \"fitter branch smoke ok\\n\""
+}
