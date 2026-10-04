@@ -1,0 +1,12 @@
+{
+  "coordinator": "ubuntu-blink",
+  "exit_code": 0,
+  "repository": "csned-inl/fitter-artifact",
+  "request_id": "rerun-20261004-010837-bridge-smoke-20261004-000736",
+  "resolved_sha": "f968a86bdc311da783b5ad81400e523047b31827",
+  "schema": "clarity.compute.result.v1",
+  "source_commit": "f968a86bdc311da783b5ad81400e523047b31827",
+  "stderr_tail": "",
+  "stdout_tail": "fitter branch smoke ok\n",
+  "worker": "ubuntu-blink"
+}
