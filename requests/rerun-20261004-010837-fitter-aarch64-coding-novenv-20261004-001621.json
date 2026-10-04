@@ -1,0 +1,15 @@
+{
+  "command": "set -euo pipefail\npython3 --version\npython3 - <<'PY'\ntry:\n    import z3\n    print('z3 available:', z3.get_version_string())\nexcept ImportError:\n    print('z3 unavailable: solver tests will skip on this worker')\nPY\npython3 -m compileall -q src scripts tests/certification\nPYTHONPATH=src python3 tests/certification/validate_constraint_logic.py -v\nPYTHONPATH=src python3 tests/certification/validate_structural_discretization.py -v\nPYTHONPATH=src python3 tests/certification/validate_structural_markov.py -v\nPYTHONPATH=src python3 tests/certification/validate_controller_class_analysis.py -v\nPYTHONPATH=src python3 tests/certification/validate_ot_markov_pipeline.py -v\nprintf 'aarch64-coding-suite-ok\\n'",
+  "inputs": {
+    "commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95",
+    "repository": "csned-inl/fitter-artifact"
+  },
+  "request_id": "rerun-20261004-010837-fitter-aarch64-coding-novenv-20261004-001621",
+  "rerun_of": "fitter-aarch64-coding-novenv-20261004-001621",
+  "resources": {
+    "architecture": "aarch64",
+    "min_cpus": 4,
+    "min_memory_mb": 2000,
+    "worker": "auto"
+  }
+}
