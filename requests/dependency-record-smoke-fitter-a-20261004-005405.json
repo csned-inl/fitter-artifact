@@ -1,0 +1,14 @@
+{
+  "request_id": "dependency-record-smoke-fitter-a-20261004-005405",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "77494663012487cad802bb4b99ee940e39d43010"
+  },
+  "resources": {
+    "worker": "ubuntu-blink",
+    "architecture": "x86_64",
+    "min_cpus": 1,
+    "min_memory_mb": 128
+  },
+  "command": "printf \"dependency-record-smoke-ok\\n\""
+}
