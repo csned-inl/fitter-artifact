@@ -1,0 +1,15 @@
+{
+  "request_id": "fitter-macos-arm-full-deps-20261004-061001",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "77494663012487cad802bb4b99ee940e39d43010"
+  },
+  "resources": {
+    "worker": "auto",
+    "operating_system": "macos",
+    "architecture": "arm64",
+    "min_cpus": 8,
+    "min_memory_mb": 8000
+  },
+  "command": "set -euo pipefail\nprintf '[job] fitter full dependency and parallel symbolic suite\\n'\nprintf '[worker] host=%s os=%s arch=%s cpus=%s memory_bytes=%s\\n' \"$(hostname)\" \"$(uname -s)\" \"$(uname -m)\" \"$(sysctl -n hw.ncpu)\" \"$(sysctl -n hw.memsize)\"\npython3 --version\npython3 -m venv .runner-venv-full\n. .runner-venv-full/bin/activate\npython -m pip install --disable-pip-version-check --quiet -r requirements.txt\npython - <<'PY'\nimport platform\nimport numpy\nimport scipy\nimport torch\nimport yaml\nimport z3\nprint(f\"[python] {platform.python_version()}\")\nprint(f\"[numpy] {numpy.__version__}\")\nprint(f\"[scipy] {scipy.__version__}\")\nprint(f\"[torch] {torch.__version__} mps_built={torch.backends.mps.is_built()} mps_available={torch.backends.mps.is_available()}\")\nprint(f\"[pyyaml] {yaml.__version__}\")\nprint(f\"[z3] {z3.get_version_string()}\")\nPY\ntests=\"tests/certification/validate_controller_class_analysis.py tests/certification/validate_mixing_symbolic_machine.py tests/certification/validate_ot_markov_pipeline.py tests/certification/validate_structural_discretization.py tests/certification/validate_structural_markov.py tests/certification/validate_thermostat_symbolic_machine.py\"\npids=\"\"\noutputs=\"\"\nfor test_file in $tests\ndo\n  output_file=\"$(basename \"$test_file\").out\"\n  PYTHONPATH=src python \"$test_file\" -v >\"$output_file\" 2>&1 &\n  pids=\"$pids $!\"\n  outputs=\"$outputs $output_file\"\ndone\nstatus=0\nfor pid in $pids\ndo\n  wait \"$pid\" || status=1\ndone\nfor output_file in $outputs\ndo\n  printf '[test-output] %s\\n' \"$output_file\"\n  cat \"$output_file\"\ndone\ntest \"$status\" -eq 0\nprintf '[job] full-deps-parallel-suite-passed\\n'"
+}
