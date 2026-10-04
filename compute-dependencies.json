@@ -1,0 +1,7 @@
+{
+  "schema": "clarity.compute.dependencies.v1",
+  "files": [
+    "pyproject.toml",
+    "requirements.txt"
+  ]
+}
