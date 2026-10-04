@@ -1,0 +1,15 @@
+{
+  "request_id": "fitter-macbook-proof-stack-20261004-061000",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "77494663012487cad802bb4b99ee940e39d43010"
+  },
+  "resources": {
+    "worker": "macbook",
+    "operating_system": "macos",
+    "architecture": "arm64",
+    "min_cpus": 2,
+    "min_memory_mb": 2048
+  },
+  "command": "set -euo pipefail\nprintf '[job] fitter Mac ARM proof stack\\n'\nprintf '[worker] host=%s os=%s arch=%s cpus=%s\\n' \"$(hostname)\" \"$(uname -s)\" \"$(uname -m)\" \"$(sysctl -n hw.ncpu)\"\npython3 --version\npython3 -m venv .runner-venv-ci\n. .runner-venv-ci/bin/activate\npython -m pip install --disable-pip-version-check --quiet -r requirements-ci.txt\npython - <<'PY'\nimport platform\nimport z3\nprint(f\"[python] {platform.python_version()}\")\nprint(f\"[z3] {z3.get_version_string()}\")\nPY\nPYTHONPATH=src python scripts/validate_symbolic_methods.py --timeout-ms 15000\nfor model in   src/clarity/models/thermostat/model.sysml   src/clarity/models/mixing-sysml-model/model.sysml   tests/fixtures/standalone/cruise-controller-model.sysml\ndo\n  printf '[markov] %s\\n' \"$model\"\n  PYTHONPATH=src python scripts/prove_markov.py \"$model\" --timeout-ms 15000\n  printf '[discretization] %s\\n' \"$model\"\n  PYTHONPATH=src python scripts/certify_discretization.py \"$model\" --validate-z3 --timeout-ms 15000\ndone\nprintf '[job] proof-stack-passed\\n'"
+}
