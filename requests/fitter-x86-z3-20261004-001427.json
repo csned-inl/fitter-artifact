@@ -1,0 +1,14 @@
+{
+  "request_id": "fitter-x86-z3-20261004-001427",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95"
+  },
+  "resources": {
+    "worker": "ubuntu-blink",
+    "architecture": "x86_64",
+    "min_cpus": 1,
+    "min_memory_mb": 1024
+  },
+  "command": "set -euo pipefail\npython3 -m venv .compute-venv\n. .compute-venv/bin/activate\npython -m pip install --disable-pip-version-check --quiet --requirement requirements-ci.txt\nPYTHONPATH=src python scripts/validate_symbolic_methods.py"
+}
