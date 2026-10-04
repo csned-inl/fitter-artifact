@@ -1,0 +1,12 @@
+{
+  "coordinator": "ubuntu-blink",
+  "exit_code": 0,
+  "repository": "csned-inl/fitter-artifact",
+  "request_id": "dependency-sweep-blink-fitter-20261004-003933",
+  "resolved_sha": "fe67d2ea4df66f929b7529e458c38e57c4d89b95",
+  "schema": "clarity.compute.result.v1",
+  "source_commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95",
+  "stderr_tail": "test_cruise_fixture_is_exact_standalone_blob (__main__.OTMarkovPipelineTests.test_cruise_fixture_is_exact_standalone_blob) ... ok\ntest_noninvertible_observation_is_rejected (__main__.OTMarkovPipelineTests.test_noninvertible_observation_is_rejected) ... ok\ntest_one_compiler_derives_all_three_candidates (__main__.OTMarkovPipelineTests.test_one_compiler_derives_all_three_candidates) ... ok\ntest_one_entry_point_certifies_all_three_models (__main__.OTMarkovPipelineTests.test_one_entry_point_certifies_all_three_models) ... ok\ntest_pipeline_has_no_model_dispatch_or_simulator_dependency (__main__.OTMarkovPipelineTests.test_pipeline_has_no_model_dispatch_or_simulator_dependency) ... ok\ntest_z3_backend_certifies_identity_execution_without_shield (__main__.OTMarkovPipelineTests.test_z3_backend_certifies_identity_execution_without_shield) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.272s\n\nOK\n",
+  "stdout_tail": "4.15.4 2.5.1 1.18.1 6.0.3 2.13.0+cpu\n",
+  "worker": "ubuntu-blink"
+}
