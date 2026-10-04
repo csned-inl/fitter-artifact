@@ -1,0 +1,14 @@
+{
+  "request_id": "fitter-aarch64-coding-20261004-001427",
+  "inputs": {
+    "repository": "csned-inl/fitter-artifact",
+    "commit": "fe67d2ea4df66f929b7529e458c38e57c4d89b95"
+  },
+  "resources": {
+    "worker": "auto",
+    "architecture": "aarch64",
+    "min_cpus": 4,
+    "min_memory_mb": 2000
+  },
+  "command": "set -euo pipefail\npython3 -m venv .compute-venv\n. .compute-venv/bin/activate\npython -m pip install --disable-pip-version-check --quiet --requirement requirements-ci.txt\npython -m compileall -q src scripts tests/certification\nPYTHONPATH=src python tests/certification/validate_constraint_logic.py -v\nPYTHONPATH=src python tests/certification/validate_structural_discretization.py -v\nPYTHONPATH=src python tests/certification/validate_structural_markov.py -v\nPYTHONPATH=src python tests/certification/validate_controller_class_analysis.py -v\nPYTHONPATH=src python tests/certification/validate_ot_markov_pipeline.py -v\nPYTHONPATH=src python scripts/validate_symbolic_methods.py"
+}
